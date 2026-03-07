@@ -1,41 +1,17 @@
 import UIKit
 
-// MARK: - Inference Protocol
-// Replace the placeholder implementation with your Gemini multimodal API call.
+// MARK: - Inference Result
 
-protocol InferenceService: Sendable {
-    func identify(image: UIImage, candidates: [String]) async throws -> String?
+struct IdentificationResult: Sendable {
+    /// Matches a key in StoreService.products
+    let productKey: String
+    /// Bounding box in 0-1 normalized portrait-image space (origin top-left).
+    /// nil if the model did not return a box.
+    let normalizedBox: CGRect?
 }
 
-// MARK: - Placeholder Implementation
-// Swap this out with your real Gemini call.
-//
-// Expected contract:
-//   - Send the cropped `image` (JPEG) and the `candidates` list to Gemini
-//   - System prompt tells Gemini to return ONLY one of the candidate strings
-//   - Return the matched candidate, or nil if no match
-//
-// Example Gemini request shape:
-// ```
-// POST /v1beta/models/gemini-pro-vision:generateContent
-// {
-//   "contents": [{
-//     "parts": [
-//       { "text": "Identify which ONE product is shown: [\(candidates)]. Reply with ONLY the name." },
-//       { "inline_data": { "mime_type": "image/jpeg", "data": "<base64>" } }
-//     ]
-//   }]
-// }
-// ```
+// MARK: - Inference Protocol
 
-final class PlaceholderInferenceService: InferenceService {
-    nonisolated func identify(image: UIImage, candidates: [String]) async throws -> String? {
-        // -------------------------------------------------------
-        // PASTE YOUR GEMINI / MODEL IMPLEMENTATION HERE
-        // -------------------------------------------------------
-
-        // Placeholder: simulate a 0.3s network call and return nil
-        try await Task.sleep(for: .milliseconds(300))
-        return nil
-    }
+protocol InferenceService: Sendable {
+    func identify(image: UIImage, candidates: [String]) async throws -> IdentificationResult?
 }

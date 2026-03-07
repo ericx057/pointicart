@@ -15,6 +15,7 @@ final class AppState {
     // Identified product
     var identifiedProductKey: String?
     var identifiedPosition: CGPoint?
+    var identifiedBoundingBox: CGRect?   // screen-space rect for the highlight overlay
     var isProductRecognized: Bool = false
     var showProductCard: Bool = false
     var showDirectCheckout: Bool = false
@@ -68,9 +69,12 @@ final class AppState {
 
         do {
             let result = try await inferenceService.identify(image: image, candidates: candidates)
-            if let key = result, storeService.product(forKey: key) != nil {
-                identifiedProductKey = key
+            if let result, storeService.product(forKey: result.productKey) != nil {
+                identifiedProductKey = result.productKey
                 identifiedPosition = capturedPosition
+                identifiedBoundingBox = result.normalizedBox.map {
+                    Self.screenRect(fromNormalized: $0, imageSize: image.size)
+                }
                 isProductRecognized = true
                 showProductCard = true
             }
@@ -88,8 +92,38 @@ final class AppState {
         showProductCard = false
         identifiedProductKey = nil
         identifiedPosition = nil
+        identifiedBoundingBox = nil
         isProductRecognized = false
         isDwelling = false
+    }
+
+    // MARK: - Coordinate Mapping
+
+    /// Map a normalized box (0-1, portrait image space) to UIKit screen points.
+    /// ARKit delivers landscape frames; after `.oriented(.right)` the portrait image
+    /// has size (rawHeight × rawWidth). ARSCNView fills the screen with aspect-fill,
+    /// so we replicate that transform here.
+    private static func screenRect(fromNormalized box: CGRect, imageSize: CGSize) -> CGRect {
+        let screen = UIScreen.main.bounds.size
+        // imageSize is in pixels (UIImage.scale == 1 when built from CIContext cgImage).
+        // Convert to points using the screen scale so math stays in UIKit point space.
+        let scale = UIScreen.main.scale
+        let imagePtWidth  = imageSize.width  / scale
+        let imagePtHeight = imageSize.height / scale
+
+        // Aspect-fill: scale so the image fully covers the screen.
+        let fillScale = max(screen.width / imagePtWidth, screen.height / imagePtHeight)
+        let scaledW = imagePtWidth  * fillScale
+        let scaledH = imagePtHeight * fillScale
+        let xOff = (scaledW - screen.width)  / 2
+        let yOff = (scaledH - screen.height) / 2
+
+        return CGRect(
+            x:      box.minX * scaledW - xOff,
+            y:      box.minY * scaledH - yOff,
+            width:  box.width  * scaledW,
+            height: box.height * scaledH
+        )
     }
 
     // MARK: - Abandoned Cart

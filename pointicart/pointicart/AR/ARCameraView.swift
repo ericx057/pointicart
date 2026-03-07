@@ -86,7 +86,7 @@ struct ARCameraView: UIViewRepresentable {
                         if Date().timeIntervalSince(start) >= 0.5 && !hasFiredDwell {
                             appState.isDwelling = true
                             hasFiredDwell = true
-                            fireDwellIdentification(pixelBuffer: pixelBuffer, normalizedPoint: point)
+                            fireDwellIdentification(pixelBuffer: pixelBuffer)
                         }
                     } else {
                         dwellStart = Date()
@@ -101,10 +101,12 @@ struct ARCameraView: UIViewRepresentable {
             isProcessing = false
         }
 
-        private func fireDwellIdentification(pixelBuffer: CVPixelBuffer, normalizedPoint: CGPoint) {
+        private func fireDwellIdentification(pixelBuffer: CVPixelBuffer) {
             Task {
-                let image = await Self.cropImage(from: pixelBuffer, around: normalizedPoint)
-                if let img = image {
+                // Convert the full frame to portrait orientation before sending to Gemini.
+                // ARKit delivers frames in landscape (.right); rotating gives Gemini
+                // an upright image so bounding-box coordinates map to the screen correctly.
+                if let img = await Self.fullPortraitImage(from: pixelBuffer) {
                     await appState.onDwellDetected(image: img)
                 }
             }
@@ -132,25 +134,12 @@ struct ARCameraView: UIViewRepresentable {
             return indexTip.location
         }
 
-        nonisolated private static func cropImage(from pixelBuffer: CVPixelBuffer, around normalizedPoint: CGPoint) async -> UIImage? {
-            let ciImage = CIImage(cvPixelBuffer: pixelBuffer)
-            let imageWidth = CGFloat(CVPixelBufferGetWidth(pixelBuffer))
-            let imageHeight = CGFloat(CVPixelBufferGetHeight(pixelBuffer))
-            let cropSize: CGFloat = 400
-            let halfSize = cropSize / 2
-            let centerX = normalizedPoint.x * imageWidth
-            let centerY = normalizedPoint.y * imageHeight
-
-            let cropRect = CGRect(
-                x: max(0, centerX - halfSize),
-                y: max(0, centerY - halfSize),
-                width: min(cropSize, imageWidth - max(0, centerX - halfSize)),
-                height: min(cropSize, imageHeight - max(0, centerY - halfSize))
-            )
-
-            let cropped = ciImage.cropped(to: cropRect)
+        /// Rotate the landscape pixel buffer 90° clockwise to produce a portrait UIImage.
+        nonisolated private static func fullPortraitImage(from pixelBuffer: CVPixelBuffer) async -> UIImage? {
+            // CIImage oriented(.right) rotates landscape → portrait
+            let ciImage = CIImage(cvPixelBuffer: pixelBuffer).oriented(.right)
             let context = CIContext()
-            guard let cgImage = context.createCGImage(cropped, from: cropped.extent) else { return nil }
+            guard let cgImage = context.createCGImage(ciImage, from: ciImage.extent) else { return nil }
             return UIImage(cgImage: cgImage)
         }
     }

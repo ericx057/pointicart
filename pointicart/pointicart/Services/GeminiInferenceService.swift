@@ -1,32 +1,40 @@
 import UIKit
 
 // MARK: - Gemini Multimodal Inference
-// Uses gemini-1.5-flash to map a cropped camera frame to one of the store's product keys.
-// The API key is loaded from Secrets.swift (gitignored — never committed).
+// Sends the full portrait-oriented camera frame to gemini-2.0-flash.
+// Returns the matched product key + a bounding box (0-1 normalized, portrait image space).
 
 final class GeminiInferenceService: InferenceService {
 
     private let apiKey: String
-    private let model = "gemini-1.5-flash"
+    private let model = "gemini-2.0-flash"
     private let baseURL = "https://generativelanguage.googleapis.com/v1beta/models"
 
     init(apiKey: String) {
         self.apiKey = apiKey
     }
 
-    nonisolated func identify(image: UIImage, candidates: [String]) async throws -> String? {
+    nonisolated func identify(image: UIImage, candidates: [String]) async throws -> IdentificationResult? {
         guard !candidates.isEmpty else { return nil }
-        guard let imageData = image.jpegData(compressionQuality: 0.7) else { return nil }
+        guard let imageData = image.jpegData(compressionQuality: 0.8) else { return nil }
 
         let base64Image = imageData.base64EncodedString()
         let candidateList = candidates.joined(separator: ", ")
 
+        // Ask Gemini to identify the product AND return its bounding box.
+        // Box format: values 0-1000 (Gemini standard), origin top-left.
         let prompt = """
         You are a product identifier for a retail store. \
-        A customer is pointing at a product in the image. \
-        Identify which ONE of these products is shown: [\(candidateList)]. \
-        Reply with ONLY the exact product name from that list. \
-        If none match, reply with exactly: none
+        Look at this image and identify if any of these products are visible: [\(candidateList)].
+
+        If you find one of the listed products, respond with ONLY valid JSON (no markdown, no explanation):
+        {"product": "Chair", "ymin": 200, "xmin": 100, "ymax": 800, "xmax": 900}
+
+        The box values (ymin, xmin, ymax, xmax) are integers 0-1000 representing the bounding box \
+        of the detected product (0,0 = top-left of image, 1000,1000 = bottom-right).
+
+        If NONE of the listed products are visible, respond with ONLY:
+        {"product": "none"}
         """
 
         let requestBody: [String: Any] = [
@@ -43,7 +51,8 @@ final class GeminiInferenceService: InferenceService {
             ]],
             "generationConfig": [
                 "temperature": 0,
-                "maxOutputTokens": 30
+                "maxOutputTokens": 80,
+                "responseMimeType": "application/json"
             ]
         ]
 
@@ -58,7 +67,7 @@ final class GeminiInferenceService: InferenceService {
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = bodyData
-        request.timeoutInterval = 15
+        request.timeoutInterval = 20
 
         let (data, response) = try await URLSession.shared.data(for: request)
 
@@ -70,25 +79,44 @@ final class GeminiInferenceService: InferenceService {
         return parseResponse(data: data, validCandidates: candidates)
     }
 
-    nonisolated private func parseResponse(data: Data, validCandidates: [String]) -> String? {
+    nonisolated private func parseResponse(data: Data, validCandidates: [String]) -> IdentificationResult? {
+        // Extract the text from Gemini's response envelope
         guard
-            let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-            let candidates = json["candidates"] as? [[String: Any]],
+            let envelope = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+            let candidates = envelope["candidates"] as? [[String: Any]],
             let content = candidates.first?["content"] as? [String: Any],
             let parts = content["parts"] as? [[String: Any]],
             let text = parts.first?["text"] as? String
-        else {
-            return nil
+        else { return nil }
+
+        let cleaned = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let jsonData = cleaned.data(using: .utf8),
+              let parsed = try? JSONSerialization.jsonObject(with: jsonData) as? [String: Any]
+        else { return nil }
+
+        guard let productName = parsed["product"] as? String,
+              productName.lowercased() != "none"
+        else { return nil }
+
+        // Match to a known store key (case-insensitive)
+        guard let matchedKey = validCandidates.first(where: {
+            $0.lowercased() == productName.lowercased()
+        }) else { return nil }
+
+        // Parse bounding box if present (0-1000 → 0-1 normalized)
+        var box: CGRect?
+        if let ymin = parsed["ymin"] as? Double,
+           let xmin = parsed["xmin"] as? Double,
+           let ymax = parsed["ymax"] as? Double,
+           let xmax = parsed["xmax"] as? Double {
+            box = CGRect(
+                x: xmin / 1000.0,
+                y: ymin / 1000.0,
+                width: (xmax - xmin) / 1000.0,
+                height: (ymax - ymin) / 1000.0
+            )
         }
 
-        let result = text.trimmingCharacters(in: .whitespacesAndNewlines)
-
-        // Reject "none" responses
-        guard result.lowercased() != "none" else { return nil }
-
-        // Only return a result that maps to a known store key (case-insensitive match)
-        return validCandidates.first {
-            $0.lowercased() == result.lowercased()
-        }
+        return IdentificationResult(productKey: matchedKey, normalizedBox: box)
     }
 }
