@@ -11,18 +11,35 @@ struct ContentView: View {
 
             // Layer 2: Scanning indicator at fingertip
             if let position = appState.fingertipPosition {
-                ScanningIndicator(isDwelling: appState.isDwelling, isIdentifying: appState.isIdentifying)
-                    .position(position)
+                ScanningIndicator(
+                    isDwelling: appState.isDwelling,
+                    isIdentifying: appState.isIdentifying,
+                    isProductRecognized: appState.isProductRecognized
+                )
+                .position(position)
             }
 
-            // Layer 3: Product identification cards
+            // Layer 3: Product highlight glow at identified position
+            if appState.isProductRecognized, let pos = appState.identifiedPosition {
+                ProductHighlight()
+                    .position(pos)
+            }
+
+            // Layer 4: Product identification cards
             if appState.showProductCard, let product = appState.identifiedProduct {
                 VStack(spacing: 12) {
                     Spacer()
-                    ProductCardView(product: product) {
-                        appState.cartManager.add(product)
-                        appState.startAbandonedCartTimer()
-                    }
+                    ProductCardView(
+                        product: product,
+                        onAddToCart: {
+                            appState.cartManager.add(product)
+                            appState.startAbandonedCartTimer()
+                        },
+                        onBuyNow: {
+                            appState.cartManager.add(product)
+                            appState.showDirectCheckout = true
+                        }
+                    )
                     if let upsell = appState.upsellProduct {
                         UpsellCardView(product: upsell) {
                             appState.cartManager.add(upsell)
@@ -45,19 +62,29 @@ struct ContentView: View {
                 )
             }
 
-            // Layer 4: Cart overlay (bottom bar)
+            // Layer 5: Cart overlay (bottom bar)
             CartOverlayView(
                 cartManager: appState.cartManager,
                 storeName: appState.storeService.storeName,
                 onPaymentComplete: { appState.cancelAbandonedCartTimer() }
             )
 
-            // Layer 5: Store loading prompt (if no store loaded)
+            // Layer 6: Store loading prompt (if no store loaded)
             if !appState.storeService.isLoaded {
                 StoreLoadingPrompt(appState: appState)
             }
         }
         .animation(.spring(duration: 0.4), value: appState.showProductCard)
+        .sheet(isPresented: $appState.showDirectCheckout) {
+            CheckoutSheet(
+                cartManager: appState.cartManager,
+                storeName: appState.storeService.storeName,
+                onPaymentComplete: {
+                    appState.cancelAbandonedCartTimer()
+                    appState.dismissProductCard()
+                }
+            )
+        }
     }
 }
 
@@ -66,20 +93,27 @@ struct ContentView: View {
 struct ScanningIndicator: View {
     let isDwelling: Bool
     let isIdentifying: Bool
+    let isProductRecognized: Bool
     @State private var rotation: Double = 0
+
+    private var ringColor: Color {
+        if isProductRecognized { return .green }
+        if isDwelling || isIdentifying { return .yellow }
+        return .white
+    }
 
     var body: some View {
         ZStack {
             // Outer ring
             Circle()
-                .stroke(isDwelling ? Color.green : Color.white, lineWidth: 2)
+                .stroke(ringColor, lineWidth: 2)
                 .frame(width: 60, height: 60)
                 .opacity(0.8)
 
-            // Dwell progress arc
-            if isDwelling {
+            // Scanning arc (amber while dwelling/identifying)
+            if (isDwelling || isIdentifying) && !isProductRecognized {
                 Circle()
-                    .stroke(Color.green, lineWidth: 3)
+                    .stroke(Color.yellow, lineWidth: 3)
                     .frame(width: 60, height: 60)
                     .rotationEffect(.degrees(rotation))
                     .onAppear {
@@ -89,9 +123,22 @@ struct ScanningIndicator: View {
                     }
             }
 
+            // Recognized arc (green pulse when product confirmed)
+            if isProductRecognized {
+                Circle()
+                    .stroke(Color.green, lineWidth: 3)
+                    .frame(width: 60, height: 60)
+                    .rotationEffect(.degrees(rotation))
+                    .onAppear {
+                        withAnimation(.linear(duration: 0.6).repeatForever(autoreverses: false)) {
+                            rotation = 360
+                        }
+                    }
+            }
+
             // Center dot
             Circle()
-                .fill(isIdentifying ? Color.yellow : (isDwelling ? Color.green : Color.white))
+                .fill(isProductRecognized ? Color.green : (isDwelling || isIdentifying ? Color.yellow : Color.white))
                 .frame(width: 8, height: 8)
 
             // Crosshair lines
@@ -101,8 +148,36 @@ struct ScanningIndicator: View {
                 Rectangle().frame(width: 20, height: 1).offset(x: -20)
                 Rectangle().frame(width: 20, height: 1).offset(x: 20)
             }
-            .foregroundStyle(isDwelling ? Color.green : Color.white)
+            .foregroundStyle(ringColor)
             .opacity(0.6)
+        }
+    }
+}
+
+// MARK: - Product Highlight
+
+struct ProductHighlight: View {
+    @State private var scale: CGFloat = 1.0
+    @State private var opacity: Double = 0.8
+
+    var body: some View {
+        ZStack {
+            Circle()
+                .stroke(Color.green, lineWidth: 3)
+                .frame(width: 100, height: 100)
+                .scaleEffect(scale)
+                .opacity(opacity)
+            Circle()
+                .stroke(Color.green.opacity(0.4), lineWidth: 1)
+                .frame(width: 140, height: 140)
+                .scaleEffect(scale)
+                .opacity(opacity * 0.5)
+        }
+        .onAppear {
+            withAnimation(.easeInOut(duration: 0.9).repeatForever(autoreverses: true)) {
+                scale = 1.15
+                opacity = 0.4
+            }
         }
     }
 }

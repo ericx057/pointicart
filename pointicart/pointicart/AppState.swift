@@ -14,7 +14,10 @@ final class AppState {
 
     // Identified product
     var identifiedProductKey: String?
+    var identifiedPosition: CGPoint?
+    var isProductRecognized: Bool = false
     var showProductCard: Bool = false
+    var showDirectCheckout: Bool = false
 
     // Abandoned cart timer
     private var abandonedCartTask: Task<Void, Never>?
@@ -61,14 +64,19 @@ final class AppState {
             return
         }
 
+        let capturedPosition = fingertipPosition
+
         do {
             let result = try await inferenceService.identify(image: image, candidates: candidates)
             if let key = result, storeService.product(forKey: key) != nil {
                 identifiedProductKey = key
+                identifiedPosition = capturedPosition
+                isProductRecognized = true
                 showProductCard = true
             }
         } catch {
             // Inference failed silently — user can re-point
+            isDwelling = false
         }
 
         isIdentifying = false
@@ -79,6 +87,8 @@ final class AppState {
     func dismissProductCard() {
         showProductCard = false
         identifiedProductKey = nil
+        identifiedPosition = nil
+        isProductRecognized = false
         isDwelling = false
     }
 

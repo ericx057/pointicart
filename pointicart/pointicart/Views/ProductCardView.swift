@@ -3,6 +3,7 @@ import SwiftUI
 struct ProductCardView: View {
     let product: Product
     let onAddToCart: () -> Void
+    let onBuyNow: () -> Void
 
     var body: some View {
         VStack(spacing: 12) {
@@ -27,9 +28,18 @@ struct ProductCardView: View {
             }
             .buttonStyle(.borderedProminent)
             .tint(.blue)
+
+            Button(action: onBuyNow) {
+                Label("Buy Now", systemImage: "bolt.fill")
+                    .font(.subheadline.bold())
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 10)
+            }
+            .buttonStyle(.borderedProminent)
+            .tint(.green)
         }
         .padding(20)
-        .frame(width: 220)
+        .frame(width: 240)
         .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 20))
         .shadow(color: .black.opacity(0.3), radius: 20, y: 10)
     }

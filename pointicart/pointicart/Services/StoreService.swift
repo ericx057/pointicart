@@ -19,14 +19,11 @@ final class StoreService {
         storeId = id
         switch id {
         case 42:
-            storeName = "Tech Haven"
-            products = buildTechHavenCatalog()
+            storeName = "Pointicart Store"
+            products = buildLifestyleStoreCatalog()
         default:
-            storeName = "Demo Store"
-            products = [
-                "Mug": Product(id: "mg_01", name: "Coffee Mug", price: 12.99, imageSystemName: "cup.and.saucer", upsellId: nil),
-                "Pen": Product(id: "pn_01", name: "Ballpoint Pen", price: 4.99, imageSystemName: "pencil", upsellId: nil),
-            ]
+            storeName = "Pointicart Store"
+            products = buildLifestyleStoreCatalog()
         }
     }
 
@@ -39,20 +36,16 @@ final class StoreService {
         return products.values.first { $0.id == upsellId }
     }
 
-    private func buildTechHavenCatalog() -> [String: Product] {
+    private func buildLifestyleStoreCatalog() -> [String: Product] {
         [
             // Main products
-            "Keyboard": Product(id: "kb_01", name: "Mechanical Keyboard", price: 129.99, imageSystemName: "keyboard", upsellId: "wr_02"),
-            "Mouse": Product(id: "ms_01", name: "Wireless Mouse", price: 79.99, imageSystemName: "computermouse", upsellId: "mp_02"),
-            "Headphones": Product(id: "hp_01", name: "Studio Headphones", price: 249.99, imageSystemName: "headphones", upsellId: "hc_02"),
-            "Monitor": Product(id: "mn_01", name: "4K Display", price: 599.99, imageSystemName: "display", upsellId: "mc_02"),
-            "Mug": Product(id: "mg_01", name: "Developer Mug", price: 14.99, imageSystemName: "cup.and.saucer", upsellId: "cs_02"),
+            "Chair": Product(id: "ch_01", name: "Ergonomic Chair", price: 349.99, imageSystemName: "chair", upsellId: "cu_02"),
+            "Headphones": Product(id: "hp_01", name: "Premium Headphones", price: 199.99, imageSystemName: "headphones", upsellId: "hc_02"),
+            "Water Bottle": Product(id: "wb_01", name: "Insulated Water Bottle", price: 39.99, imageSystemName: "waterbottle", upsellId: "cb_02"),
             // Upsell products
-            "Wrist Rest": Product(id: "wr_02", name: "Ergonomic Wrist Rest", price: 29.99, imageSystemName: "hand.raised", upsellId: nil),
-            "Mouse Pad": Product(id: "mp_02", name: "XL Mouse Pad", price: 24.99, imageSystemName: "rectangle", upsellId: nil),
-            "Headphone Case": Product(id: "hc_02", name: "Headphone Case", price: 34.99, imageSystemName: "bag", upsellId: nil),
-            "Monitor Cable": Product(id: "mc_02", name: "USB-C Cable", price: 19.99, imageSystemName: "cable.connector", upsellId: nil),
-            "Coaster Set": Product(id: "cs_02", name: "Cork Coaster Set", price: 9.99, imageSystemName: "circle.grid.2x2", upsellId: nil),
+            "Chair Cushion": Product(id: "cu_02", name: "Memory Foam Cushion", price: 29.99, imageSystemName: "square.fill", upsellId: nil),
+            "Headphone Case": Product(id: "hc_02", name: "Headphone Carry Case", price: 24.99, imageSystemName: "bag", upsellId: nil),
+            "Cleaning Brush": Product(id: "cb_02", name: "Bottle Cleaning Brush", price: 9.99, imageSystemName: "paintbrush", upsellId: nil),
         ]
     }
 }
