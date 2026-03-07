@@ -102,13 +102,28 @@ struct ARCameraView: UIViewRepresentable {
         }
 
         private func fireDwellIdentification(pixelBuffer: CVPixelBuffer) {
+            // ARKit recycles pixel buffers every frame. CIImage is lazy — it just
+            // holds a reference to the buffer, not a copy. If we defer rendering
+            // to an async Task the buffer is gone and createCGImage returns nil.
+            //
+            // Fix: lock the buffer, force-render to CGImage (copies the bits)
+            // synchronously, then hand the UIImage to the async Task.
+            print("[AR] fireDwellIdentification called")
+            CVPixelBufferLockBaseAddress(pixelBuffer, .readOnly)
+            let ciImage = CIImage(cvPixelBuffer: pixelBuffer).oriented(.right)
+            let ctx = CIContext()
+            let cgImage = ctx.createCGImage(ciImage, from: ciImage.extent)
+            CVPixelBufferUnlockBaseAddress(pixelBuffer, .readOnly)
+
+            guard let cgImage else {
+                print("[AR] cgImage snapshot failed")
+                return
+            }
+            let snapshot = UIImage(cgImage: cgImage)
+            print("[AR] snapshot size: \(snapshot.size)")
+
             Task {
-                // Convert the full frame to portrait orientation before sending to Gemini.
-                // ARKit delivers frames in landscape (.right); rotating gives Gemini
-                // an upright image so bounding-box coordinates map to the screen correctly.
-                if let img = await Self.fullPortraitImage(from: pixelBuffer) {
-                    await appState.onDwellDetected(image: img)
-                }
+                await appState.onDwellDetected(image: snapshot)
             }
         }
 
@@ -132,15 +147,6 @@ struct ARCameraView: UIViewRepresentable {
             }
 
             return indexTip.location
-        }
-
-        /// Rotate the landscape pixel buffer 90° clockwise to produce a portrait UIImage.
-        nonisolated private static func fullPortraitImage(from pixelBuffer: CVPixelBuffer) async -> UIImage? {
-            // CIImage oriented(.right) rotates landscape → portrait
-            let ciImage = CIImage(cvPixelBuffer: pixelBuffer).oriented(.right)
-            let context = CIContext()
-            guard let cgImage = context.createCGImage(ciImage, from: ciImage.extent) else { return nil }
-            return UIImage(cgImage: cgImage)
         }
     }
 }
