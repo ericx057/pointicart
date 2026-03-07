@@ -67,8 +67,11 @@ final class AppState {
 
         let capturedPosition = fingertipPosition
 
+        print("[AppState] Sending image \(image.size) with candidates: \(candidates)")
+
         do {
             let result = try await inferenceService.identify(image: image, candidates: candidates)
+            print("[AppState] Inference result: \(String(describing: result?.productKey))")
             if let result, storeService.product(forKey: result.productKey) != nil {
                 identifiedProductKey = result.productKey
                 identifiedPosition = capturedPosition
@@ -79,7 +82,7 @@ final class AppState {
                 showProductCard = true
             }
         } catch {
-            // Inference failed silently — user can re-point
+            print("[AppState] Inference error: \(error)")
             isDwelling = false
         }
 

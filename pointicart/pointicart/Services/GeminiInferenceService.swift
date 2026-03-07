@@ -7,7 +7,7 @@ import UIKit
 final class GeminiInferenceService: InferenceService {
 
     private let apiKey: String
-    private let model = "gemini-2.0-flash"
+    private let model = "gemini-1.5-flash"
     private let baseURL = "https://generativelanguage.googleapis.com/v1beta/models"
 
     init(apiKey: String) {
@@ -51,8 +51,7 @@ final class GeminiInferenceService: InferenceService {
             ]],
             "generationConfig": [
                 "temperature": 0,
-                "maxOutputTokens": 80,
-                "responseMimeType": "application/json"
+                "maxOutputTokens": 100
             ]
         ]
 
@@ -71,9 +70,18 @@ final class GeminiInferenceService: InferenceService {
 
         let (data, response) = try await URLSession.shared.data(for: request)
 
-        guard let httpResponse = response as? HTTPURLResponse,
-              httpResponse.statusCode == 200 else {
+        let statusCode = (response as? HTTPURLResponse)?.statusCode ?? -1
+        print("[Gemini] HTTP \(statusCode)")
+
+        guard statusCode == 200 else {
+            if let body = String(data: data, encoding: .utf8) {
+                print("[Gemini] Error body: \(body)")
+            }
             return nil
+        }
+
+        if let raw = String(data: data, encoding: .utf8) {
+            print("[Gemini] Raw response: \(raw)")
         }
 
         return parseResponse(data: data, validCandidates: candidates)
@@ -87,34 +95,68 @@ final class GeminiInferenceService: InferenceService {
             let content = candidates.first?["content"] as? [String: Any],
             let parts = content["parts"] as? [[String: Any]],
             let text = parts.first?["text"] as? String
-        else { return nil }
+        else {
+            print("[Gemini] Failed to extract text from response")
+            return nil
+        }
 
-        let cleaned = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        print("[Gemini] Model text: \(text)")
+
+        // Strip markdown code fences if present (```json ... ``` or ``` ... ```)
+        var cleaned = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        if cleaned.hasPrefix("```") {
+            cleaned = cleaned
+                .replacingOccurrences(of: "```json", with: "")
+                .replacingOccurrences(of: "```", with: "")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+
         guard let jsonData = cleaned.data(using: .utf8),
               let parsed = try? JSONSerialization.jsonObject(with: jsonData) as? [String: Any]
-        else { return nil }
+        else {
+            print("[Gemini] JSON parse failed for: \(cleaned)")
+            return nil
+        }
 
         guard let productName = parsed["product"] as? String,
               productName.lowercased() != "none"
-        else { return nil }
+        else {
+            print("[Gemini] Product is none or missing")
+            return nil
+        }
 
         // Match to a known store key (case-insensitive)
         guard let matchedKey = validCandidates.first(where: {
             $0.lowercased() == productName.lowercased()
-        }) else { return nil }
+        }) else {
+            print("[Gemini] No match for '\(productName)' in candidates: \(validCandidates)")
+            return nil
+        }
+
+        print("[Gemini] Matched key: \(matchedKey)")
 
         // Parse bounding box if present (0-1000 → 0-1 normalized)
+        // Gemini may return ints or doubles
+        func toDouble(_ v: Any?) -> Double? {
+            if let d = v as? Double { return d }
+            if let i = v as? Int { return Double(i) }
+            return nil
+        }
+
         var box: CGRect?
-        if let ymin = parsed["ymin"] as? Double,
-           let xmin = parsed["xmin"] as? Double,
-           let ymax = parsed["ymax"] as? Double,
-           let xmax = parsed["xmax"] as? Double {
+        if let ymin = toDouble(parsed["ymin"]),
+           let xmin = toDouble(parsed["xmin"]),
+           let ymax = toDouble(parsed["ymax"]),
+           let xmax = toDouble(parsed["xmax"]) {
             box = CGRect(
                 x: xmin / 1000.0,
                 y: ymin / 1000.0,
                 width: (xmax - xmin) / 1000.0,
                 height: (ymax - ymin) / 1000.0
             )
+            print("[Gemini] Bounding box: \(box!)")
+        } else {
+            print("[Gemini] No bounding box in response")
         }
 
         return IdentificationResult(productKey: matchedKey, normalizedBox: box)
