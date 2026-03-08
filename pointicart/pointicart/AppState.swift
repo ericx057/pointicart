@@ -270,6 +270,11 @@ final class AppState {
                 } else {
                     NSLog("[PTIC] No matching product in store for result (attempt %d)", attempt)
                 }
+            } catch GeminiError.rateLimited {
+                NSLog("[PTIC] 429 rate limited — stopping retries, extending cooldown")
+                // Push lastInferenceTime forward so cooldown becomes 30s from now
+                lastInferenceTime = Date().addingTimeInterval(30.0 - inferenceCooldown)
+                break
             } catch {
                 lastError = error
                 NSLog("[PTIC] Inference ERROR (attempt %d/%d): %@", attempt, maxRetries, String(describing: error))

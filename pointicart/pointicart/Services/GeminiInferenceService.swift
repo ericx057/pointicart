@@ -1,5 +1,11 @@
 import UIKit
 
+// MARK: - Errors
+
+enum GeminiError: Error {
+    case rateLimited
+}
+
 // MARK: - Gemini Multimodal Inference
 // Sends a cropped region around the user's fingertip to gemini-2.0-flash.
 // Returns the matched clothing item key.
@@ -101,6 +107,10 @@ final class GeminiInferenceService: InferenceService {
         guard statusCode == 200 else {
             if let body = String(data: data, encoding: .utf8) {
                 NSLog("[PTIC][Gemini] Error body: %@", body.prefix(500).description)
+            }
+            if statusCode == 429 {
+                NSLog("[PTIC][Gemini] Rate limited (429) — throwing GeminiError.rateLimited")
+                throw GeminiError.rateLimited
             }
             return nil
         }
