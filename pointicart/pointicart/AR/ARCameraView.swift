@@ -18,17 +18,11 @@ struct ARCameraView: UIViewRepresentable {
 
         context.coordinator.sceneView = sceneView
 
-        // Provide on-demand snapshot capture to AppState for virtual try-on
+        // Provide on-demand snapshot capture to AppState for virtual try-on.
+        // Uses sceneView.snapshot() so the captured image matches exactly what is
+        // displayed on screen (same crop/alignment as the live AR feed).
         appState.captureSnapshot = { [weak sceneView] in
-            guard let buffer = sceneView?.session.currentFrame?.capturedImage else { return nil }
-            let lockStatus = CVPixelBufferLockBaseAddress(buffer, .readOnly)
-            guard lockStatus == kCVReturnSuccess else { return nil }
-            let ciImage = CIImage(cvPixelBuffer: buffer).oriented(.right)
-            let ctx = CIContext()
-            let cgImage = ctx.createCGImage(ciImage, from: ciImage.extent)
-            CVPixelBufferUnlockBaseAddress(buffer, .readOnly)
-            guard let cgImage else { return nil }
-            return UIImage(cgImage: cgImage)
+            return sceneView?.snapshot()
         }
 
         // Camera zoom via AVCaptureDevice (works alongside ARKit).

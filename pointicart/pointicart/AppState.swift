@@ -36,6 +36,7 @@ final class AppState {
     var capturedPersonImage: UIImage?     // frozen camera frame shown during generation
     var isGeneratingTryOn: Bool = false
     var tryOnError: String?
+    var tryOnZoom: CGFloat = 1.0          // visual zoom applied to ARCameraView
 
     /// Set by ARCameraView so we can capture a frame on demand.
     var captureSnapshot: (() -> UIImage?)?
@@ -165,7 +166,7 @@ final class AppState {
         capturedPersonImage = nil
         isGeneratingTryOn = false
         tryOnError = nil
-        applyZoom?(1.0) // reset camera zoom
+        tryOnZoom = 1.0
         NSLog("[PTIC] Exited try-on mode")
     }
 

@@ -9,6 +9,7 @@ struct ContentView: View {
                 // Layer 1: AR Camera (full screen)
                 ARCameraView(appState: appState)
                     .ignoresSafeArea()
+                    .scaleEffect(appState.isTryOnMode ? appState.tryOnZoom : 1.0)
 
                 // Layer 2: Scanning indicator at fingertip
                 if let position = appState.fingertipPosition {
@@ -553,7 +554,7 @@ struct TryOnOverlay: View {
                             .onChanged { value in
                                 let newZoom = (baseZoom * value).clamped(to: 1.0...5.0)
                                 zoomScale = newZoom
-                                appState.applyZoom?(newZoom)
+                                appState.tryOnZoom = newZoom
                                 showZoomLabel = true
                             }
                             .onEnded { _ in
@@ -576,7 +577,7 @@ struct TryOnOverlay: View {
                     .transition(.opacity)
             }
 
-            // 5. Loading indicator — centered in ZStack (not inside VStack)
+            // 5. Loading indicator — explicitly centered on screen
             if appState.isGeneratingTryOn {
                 VStack(spacing: 12) {
                     ProgressView()
@@ -588,6 +589,7 @@ struct TryOnOverlay: View {
                 }
                 .padding(24)
                 .background(.black.opacity(0.6), in: RoundedRectangle(cornerRadius: 16))
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .transition(.opacity)
             }
 
@@ -637,6 +639,7 @@ struct TryOnOverlay: View {
                             appState.tryOnResultImage = nil
                             appState.capturedPersonImage = nil
                             appState.tryOnError = nil
+                            appState.tryOnZoom = 1.0
                         } label: {
                             Label("Retake", systemImage: "camera.fill")
                                 .font(.custom("DMSans-Bold", size: 18))
@@ -657,6 +660,7 @@ struct TryOnOverlay: View {
                     .buttonStyle(.borderedProminent)
                     .tint(.red)
                 }
+                .frame(maxWidth: .infinity)
                 .padding(.horizontal, 40)
                 .padding(.bottom, safeBottom + 20)
             }
