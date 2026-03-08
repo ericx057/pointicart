@@ -15,8 +15,7 @@ struct ContentView: View {
                     ScanningIndicator(
                         isDwelling: appState.isDwelling,
                         isIdentifying: appState.isIdentifying,
-                        isProductRecognized: appState.isProductRecognized,
-                        showCartFlash: appState.showCartConfirmFlash
+                        isProductRecognized: appState.isProductRecognized
                     )
                     .position(position)
                 }
