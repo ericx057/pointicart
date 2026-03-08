@@ -13,12 +13,12 @@ struct Product: Identifiable, Hashable {
 
     init(id: String, name: String, price: Double, imageSystemName: String, upsellId: String? = nil,
          category: ProductCategory = .unsized, availableSizes: [ProductSize]? = nil,
-         visualDescription: String? = nil) {
+         visualDescription: String? = nil, assetImageName: String? = nil) {
         self.id = id
         self.name = name
         self.price = price
         self.imageSystemName = imageSystemName
-        self.assetImageName = nil
+        self.assetImageName = assetImageName
         self.upsellId = upsellId
         self.category = category
         self.availableSizes = availableSizes

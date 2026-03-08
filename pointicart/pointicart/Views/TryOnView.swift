@@ -27,24 +27,28 @@ struct TryOnOverlay: View {
             // 1. Frozen frame — full screen, shown after capture, before result
             if appState.tryOnResultImage == nil,
                let capturedImage = appState.capturedPersonImage {
-                Image(uiImage: capturedImage)
-                    .resizable()
-                    .aspectRatio(contentMode: .fill)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .clipped()
-                    .ignoresSafeArea()
-                    .transition(.opacity)
+                GeometryReader { geo in
+                    Image(uiImage: capturedImage)
+                        .resizable()
+                        .aspectRatio(contentMode: .fill)
+                        .frame(width: geo.size.width, height: geo.size.height)
+                        .clipped()
+                }
+                .ignoresSafeArea()
+                .transition(.opacity)
             }
 
             // 2. Result image — true full screen
             if let resultImage = appState.tryOnResultImage {
-                Image(uiImage: resultImage)
-                    .resizable()
-                    .aspectRatio(contentMode: .fill)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .clipped()
-                    .ignoresSafeArea()
-                    .transition(.opacity)
+                GeometryReader { geo in
+                    Image(uiImage: resultImage)
+                        .resizable()
+                        .aspectRatio(contentMode: .fill)
+                        .frame(width: geo.size.width, height: geo.size.height)
+                        .clipped()
+                }
+                .ignoresSafeArea()
+                .transition(.opacity)
             }
 
             // 3. Pinch-to-zoom on live camera (before capture)
@@ -87,26 +91,52 @@ struct TryOnOverlay: View {
                         .scaleEffect(1.5)
                         .tint(.white)
                     Text("Generating try-on...")
-                        .font(.custom("DMSans-Bold", size: 16))
+                        .font(.subheadline.weight(.medium))
                         .foregroundStyle(.white)
                 }
                 .padding(24)
-                .background(.black.opacity(0.6), in: RoundedRectangle(cornerRadius: 16))
+                .background {
+                    GlassBackground(cornerRadius: 16)
+                }
+                .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
                 .transition(.opacity)
             }
 
-            // 6. Top banner — below status bar
+            // 6. Top banner — glass material style
             VStack(spacing: 0) {
                 Color.clear.frame(height: safeTop)
-                HStack {
-                    Image(systemName: "tshirt").font(.headline)
+                HStack(spacing: 10) {
+                    Image(systemName: "tshirt")
+                        .font(.subheadline.weight(.medium))
+                        .foregroundStyle(.white.opacity(0.8))
                     Text("Try On\(appState.tryOnProduct.map { ": \($0.name)" } ?? "")")
-                        .font(.custom("DMSans-Bold", size: 16))
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.white)
                     Spacer()
+                    if let product = appState.tryOnProduct {
+                        Text(product.formattedPrice)
+                            .font(.subheadline.weight(.medium))
+                            .foregroundStyle(.white.opacity(0.7))
+                    }
                 }
                 .padding(.horizontal, 20)
                 .padding(.vertical, 12)
-                .background(.ultraThinMaterial)
+                .background {
+                    ZStack {
+                        Rectangle().fill(.ultraThinMaterial)
+                        Rectangle().fill(
+                            LinearGradient(
+                                colors: [.white.opacity(0.1), .white.opacity(0.02)],
+                                startPoint: .top, endPoint: .bottom
+                            )
+                        )
+                    }
+                    .overlay(alignment: .bottom) {
+                        Rectangle()
+                            .fill(.white.opacity(0.15))
+                            .frame(height: 0.5)
+                    }
+                }
                 Spacer()
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
@@ -116,7 +146,7 @@ struct TryOnOverlay: View {
                 Spacer()
                 if let error = appState.tryOnError {
                     Text(error)
-                        .font(.custom("DMSans-Bold", size: 14))
+                        .font(.caption.weight(.medium))
                         .foregroundStyle(.red)
                         .multilineTextAlignment(.center)
                         .padding(.horizontal, 16)
@@ -124,45 +154,100 @@ struct TryOnOverlay: View {
                         .background(.black.opacity(0.6), in: RoundedRectangle(cornerRadius: 12))
                         .padding(.bottom, 12)
                 }
-                VStack(spacing: 12) {
+
+                VStack(spacing: 10) {
+                    // Take Photo — before capture
                     if appState.capturedPersonImage == nil && !appState.isGeneratingTryOn {
                         Button { appState.captureAndGenerateTryOn() } label: {
                             Label("Take Photo", systemImage: "camera.fill")
-                                .font(.custom("DMSans-Bold", size: 18))
+                                .font(.subheadline.weight(.semibold))
+                                .foregroundStyle(.white)
                                 .frame(maxWidth: .infinity)
-                                .padding(.vertical, 16)
+                                .padding(.vertical, 14)
+                                .background(.white.opacity(0.2), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                                        .stroke(.white.opacity(0.3), lineWidth: 0.5)
+                                )
                         }
-                        .buttonStyle(.borderedProminent)
-                        .tint(.purple)
+                        .buttonStyle(.plain)
                     }
+
+                    // Result actions — Retake + Checkout
                     if appState.tryOnResultImage != nil ||
                        (appState.tryOnError != nil && !appState.isGeneratingTryOn) {
-                        Button {
-                            appState.tryOnResultImage = nil
-                            appState.capturedPersonImage = nil
-                            appState.tryOnError = nil
-                        } label: {
-                            Label("Retake", systemImage: "camera.fill")
-                                .font(.custom("DMSans-Bold", size: 18))
-                                .frame(maxWidth: .infinity)
-                                .padding(.vertical, 16)
+                        HStack(spacing: 10) {
+                            Button {
+                                appState.tryOnResultImage = nil
+                                appState.capturedPersonImage = nil
+                                appState.tryOnError = nil
+                            } label: {
+                                Label("Retake", systemImage: "camera.fill")
+                                    .font(.subheadline.weight(.semibold))
+                                    .foregroundStyle(.white)
+                                    .frame(maxWidth: .infinity)
+                                    .padding(.vertical, 14)
+                                    .background(.white.opacity(0.15), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                                    .overlay(
+                                        RoundedRectangle(cornerRadius: 14, style: .continuous)
+                                            .stroke(.white.opacity(0.2), lineWidth: 0.5)
+                                    )
+                            }
+                            .buttonStyle(.plain)
+
+                            if appState.tryOnResultImage != nil, let product = appState.tryOnProduct {
+                                Button {
+                                    appState.addToCart(product)
+                                    appState.exitTryOnMode()
+                                    appState.showDirectCheckout = true
+                                } label: {
+                                    Label("Checkout", systemImage: "bag.fill")
+                                        .font(.subheadline.weight(.semibold))
+                                        .foregroundStyle(.white)
+                                        .frame(maxWidth: .infinity)
+                                        .padding(.vertical, 14)
+                                        .background(.white.opacity(0.25), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                                        .overlay(
+                                            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                                                .stroke(.white.opacity(0.3), lineWidth: 0.5)
+                                        )
+                                }
+                                .buttonStyle(.plain)
+                            }
                         }
-                        .buttonStyle(.borderedProminent)
-                        .tint(.purple)
                     }
+
+                    // Exit button
                     Button {
                         withAnimation(.spring(duration: 0.3)) { appState.exitTryOnMode() }
                     } label: {
                         Label("Exit Try-On", systemImage: "xmark")
-                            .font(.custom("DMSans-Bold", size: 18))
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.white.opacity(0.7))
                             .frame(maxWidth: .infinity)
-                            .padding(.vertical, 16)
+                            .padding(.vertical, 12)
                     }
-                    .buttonStyle(.borderedProminent)
-                    .tint(.red)
+                    .buttonStyle(.plain)
                 }
-                .padding(.horizontal, 40)
-                .padding(.bottom, safeBottom + 20)
+                .padding(.horizontal, 20)
+                .padding(.vertical, 16)
+                .padding(.bottom, safeBottom)
+                .background {
+                    ZStack {
+                        Rectangle().fill(.ultraThinMaterial)
+                        Rectangle().fill(
+                            LinearGradient(
+                                colors: [.white.opacity(0.1), .white.opacity(0.02)],
+                                startPoint: .top, endPoint: .bottom
+                            )
+                        )
+                    }
+                    .overlay(alignment: .top) {
+                        Rectangle()
+                            .fill(.white.opacity(0.15))
+                            .frame(height: 0.5)
+                    }
+                }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
