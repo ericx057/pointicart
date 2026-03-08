@@ -13,14 +13,14 @@ enum GeminiError: Error {
 final class GeminiInferenceService: InferenceService {
 
     private let apiKey: String
-    private let model = "gemini-2.5"
+    private let model = "gemini-2.5-flash"
     private let baseURL = "https://generativelanguage.googleapis.com/v1beta/models"
 
     init(apiKey: String) {
         self.apiKey = apiKey
     }
 
-    nonisolated func identify(image: UIImage, candidates: [String]) async throws -> IdentificationResult? {
+    nonisolated func identify(image: UIImage, candidates: [String], candidateDescriptions: [String: String]) async throws -> IdentificationResult? {
         NSLog("[PTIC][Gemini] identify called — candidates=%@", candidates.joined(separator: ", "))
 
         guard !candidates.isEmpty else {
@@ -28,13 +28,13 @@ final class GeminiInferenceService: InferenceService {
             return nil
         }
 
-        // Downscale to max 768px on longest side to reduce token usage
-        let resized = Self.resizeImage(image, maxDimension: 768)
+        // Downscale to max 512px on longest side to reduce token usage
+        let resized = Self.resizeImage(image, maxDimension: 512)
         NSLog("[PTIC][Gemini] Resized from %.0fx%.0f to %.0fx%.0f",
               image.size.width, image.size.height,
               resized.size.width, resized.size.height)
 
-        guard let imageData = resized.jpegData(compressionQuality: 0.7) else {
+        guard let imageData = resized.jpegData(compressionQuality: 0.4) else {
             NSLog("[PTIC][Gemini] FAILED — jpegData returned nil")
             return nil
         }
@@ -43,24 +43,39 @@ final class GeminiInferenceService: InferenceService {
         NSLog("[PTIC][Gemini] Image encoded: %d bytes JPEG, %d chars base64",
               imageData.count, base64Image.count)
 
-        let candidateList = candidates.joined(separator: ", ")
+        // Build a detailed product reference list with visual descriptions
+        var productReference = ""
+        for candidate in candidates {
+            if let desc = candidateDescriptions[candidate], !desc.isEmpty {
+                productReference += "- \(candidate): \(desc)\n"
+            } else {
+                productReference += "- \(candidate)\n"
+            }
+        }
 
-        // Ask Gemini to identify the product from the cropped fingertip region.
+        // Ask Gemini to compare the image against every product description
         let prompt = """
-        You are a clothing identifier for a retail clothing store. A customer is pointing at an article of clothing. \
-        This image is cropped around where the customer is pointing. Identify which ONE of these clothing items \
-        is most prominent in this image: [\(candidateList)].
+        You are a product identification system for a retail store. A customer is pointing at a product. \
+        Compare everything visible in this camera frame against each product description below and identify the best match.
 
-        If you find one of the listed clothing items, respond with ONLY valid JSON (no markdown, no explanation):
-        {"product": "Jacket"}
+        PRODUCT CATALOG:
+        \(productReference)
+        Carefully compare the visual features in the image (shape, texture, pattern, color, material, construction) \
+        against EVERY product description above. Pick the single best match.
+
+        If you find a match, respond with ONLY valid JSON (no markdown, no explanation):
+        {"product": "Sweater", "ymin": 200, "xmin": 150, "ymax": 600, "xmax": 450}
+
+        The bounding box coordinates must be in 0-1000 space (where 0,0 is top-left and 1000,1000 is bottom-right).
 
         IMPORTANT RULES:
-        - The "product" value must EXACTLY match one of the candidate names listed above.
-        - Do NOT add adjectives, hyphens, or extra words. Use the candidate name verbatim.
-        - Focus on the article of clothing in the image, not background objects or people.
-        - Identify the clothing item itself (on a rack, mannequin, shelf, or being held), not what someone is wearing.
+        - The "product" value must EXACTLY match one of the product names listed above.
+        - Do NOT add adjectives, hyphens, or extra words. Use the product name verbatim.
+        - Always include a bounding box (ymin, xmin, ymax, xmax) around the matched product.
+        - Compare against ALL products — do not stop at the first plausible match.
+        - Focus on items on racks, mannequins, shelves, or being held — not what someone is wearing.
 
-        If NONE of the listed clothing items are clearly visible, respond with ONLY:
+        If NONE of the listed products are clearly visible, respond with ONLY:
         {"product": "none"}
         """
 
@@ -78,7 +93,7 @@ final class GeminiInferenceService: InferenceService {
             ]],
             "generationConfig": [
                 "temperature": 0,
-                "maxOutputTokens": 128
+                "maxOutputTokens": 256
             ]
         ]
 

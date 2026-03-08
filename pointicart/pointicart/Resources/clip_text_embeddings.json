@@ -1,0 +1,22 @@
+{
+  "_comment": "Pre-computed CLIP text embeddings. Generate using generate_clip_embeddings.py",
+  "jacket": [],
+  "t-shirt": [],
+  "hoodie": [],
+  "sweater": [],
+  "pants": [],
+  "dress": [],
+  "sneakers": [],
+  "scarf": [],
+  "cap": [],
+  "beanie": [],
+  "gloves": [],
+  "belt": [],
+  "clutch": [],
+  "premium laces": [],
+  "sunglasses": [],
+  "watch": [],
+  "handbag": [],
+  "socks": [],
+  "tank top": []
+}

@@ -13,5 +13,10 @@ struct IdentificationResult: Sendable {
 // MARK: - Inference Protocol
 
 protocol InferenceService: Sendable {
-    func identify(image: UIImage, candidates: [String]) async throws -> IdentificationResult?
+    /// Identify a product from the image.
+    /// - Parameters:
+    ///   - image: The camera frame snapshot.
+    ///   - candidates: Product name keys from the store catalog.
+    ///   - candidateDescriptions: Maps each candidate name to a visual description for comparison.
+    func identify(image: UIImage, candidates: [String], candidateDescriptions: [String: String]) async throws -> IdentificationResult?
 }

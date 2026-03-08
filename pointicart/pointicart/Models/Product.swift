@@ -9,9 +9,11 @@ struct Product: Identifiable, Hashable {
     let upsellId: String?
     let category: ProductCategory
     let availableSizes: [ProductSize]?
+    let visualDescription: String?
 
     init(id: String, name: String, price: Double, imageSystemName: String, upsellId: String? = nil,
-         category: ProductCategory = .unsized, availableSizes: [ProductSize]? = nil) {
+         category: ProductCategory = .unsized, availableSizes: [ProductSize]? = nil,
+         visualDescription: String? = nil) {
         self.id = id
         self.name = name
         self.price = price
@@ -20,10 +22,12 @@ struct Product: Identifiable, Hashable {
         self.upsellId = upsellId
         self.category = category
         self.availableSizes = availableSizes
+        self.visualDescription = visualDescription
     }
 
     init(id: String, name: String, price: Double, assetImageName: String, upsellId: String? = nil,
-         category: ProductCategory = .unsized, availableSizes: [ProductSize]? = nil) {
+         category: ProductCategory = .unsized, availableSizes: [ProductSize]? = nil,
+         visualDescription: String? = nil) {
         self.id = id
         self.name = name
         self.price = price
@@ -32,6 +36,7 @@ struct Product: Identifiable, Hashable {
         self.upsellId = upsellId
         self.category = category
         self.availableSizes = availableSizes
+        self.visualDescription = visualDescription
     }
 
     var formattedPrice: String {

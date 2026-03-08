@@ -5,7 +5,7 @@ import Observation
 final class AppState {
     let storeService = StoreService()
     let cartManager = CartManager()
-    let inferenceService: any InferenceService = GeminiInferenceService(apiKey: Secrets.geminiAPIKey)
+    let inferenceService: any InferenceService = CLIPInferenceService()
 
     // Recommendation engine services
     let vectorStore = InteractionVectorStore()
@@ -31,9 +31,8 @@ final class AppState {
     // UX: Cart confirm flash (feature 7)
     var showCartConfirmFlash: Bool = false
 
-    // UX: Recognition failure after retries
+    // UX: Recognition failure
     var showRecognitionError: Bool = false
-    private let maxRetries = 3
 
     // UX: Position cache for instant re-identification (feature 1)
     private var positionCache: [String: PositionCacheEntry] = [:]
@@ -43,9 +42,9 @@ final class AppState {
     private var autoDismissTask: Task<Void, Never>?
     private let autoDismissDelay: TimeInterval = 4.0
 
-    // UX: Cooldown between Gemini API calls
+    // UX: Cooldown between inference calls (shorter for local model)
     private var lastInferenceTime: Date = .distantPast
-    private let inferenceCooldown: TimeInterval = 5.0
+    private var inferenceCooldown: TimeInterval = 5.0
 
     // Abandoned cart timer
     private var abandonedCartTask: Task<Void, Never>?
@@ -225,7 +224,7 @@ final class AppState {
             return
         }
 
-        // No cache hit — call Gemini with retries
+        // No cache hit — call Gemini inference with retries
         isIdentifying = true
         lastInferenceTime = Date()
         showRecognitionError = false
@@ -234,21 +233,42 @@ final class AppState {
             NSLog("[PTIC] onDwellDetected EXIT — isIdentifying reset to false")
         }
 
-        NSLog("[PTIC] Sending image %.0fx%.0f to Gemini with %d candidates",
-              image.size.width, image.size.height, candidates.count)
+        // Build visual description map from store catalog
+        var descriptions: [String: String] = [:]
+        for key in candidates {
+            if let product = storeService.product(forKey: key),
+               let desc = product.visualDescription {
+                descriptions[key] = desc
+            }
+        }
 
-        var lastError: Error?
+        NSLog("[PTIC] Sending image %.0fx%.0f to Gemini with %d candidates (%d with descriptions)",
+              image.size.width, image.size.height, candidates.count, descriptions.count)
+
+        // Retry up to 3 times with exponential backoff (1s, 2s, 4s)
+        let maxRetries = 3
         for attempt in 1...maxRetries {
             do {
-                let result = try await inferenceService.identify(image: image, candidates: candidates)
+                let result = try await inferenceService.identify(
+                    image: image,
+                    candidates: candidates,
+                    candidateDescriptions: descriptions
+                )
                 NSLog("[PTIC] Inference result (attempt %d): %@", attempt, String(describing: result?.productKey))
                 if let result, storeService.product(forKey: result.productKey) != nil {
-                    // Image is cropped around the fingertip so the bounding box from Gemini
-                    // is relative to the crop, not the full screen. Use fingertip position
-                    // for card placement instead.
                     identifiedProductKey = result.productKey
                     identifiedPosition = capturedPosition
-                    identifiedBoundingBox = nil
+
+                    // Convert normalized bounding box (0-1) to screen-space
+                    if let normalizedBox = result.normalizedBox {
+                        identifiedBoundingBox = Self.screenRect(
+                            fromNormalized: normalizedBox,
+                            imageSize: image.size
+                        )
+                    } else {
+                        identifiedBoundingBox = nil
+                    }
+
                     isProductRecognized = true
                     showProductCard = true
                     NSLog("[PTIC] Product recognized: %@ — showProductCard=true", result.productKey)
@@ -257,7 +277,7 @@ final class AppState {
                     cacheIdentification(
                         productKey: result.productKey,
                         position: capturedPosition,
-                        boundingBox: nil
+                        boundingBox: identifiedBoundingBox
                     )
 
                     // Feature 5: Start auto-dismiss timer
@@ -268,27 +288,29 @@ final class AppState {
                     vectorStore.recordProductView(productKey: result.productKey)
                     return
                 } else {
-                    NSLog("[PTIC] No matching product in store for result (attempt %d)", attempt)
+                    NSLog("[PTIC] No matching product in store for result")
                 }
-            } catch GeminiError.rateLimited {
-                NSLog("[PTIC] 429 rate limited — stopping retries, extending cooldown")
-                // Push lastInferenceTime forward so cooldown becomes 30s from now
-                lastInferenceTime = Date().addingTimeInterval(30.0 - inferenceCooldown)
-                break
+                break  // No error — don't retry on a valid "no match" response
+            } catch let error as GeminiError where error == .rateLimited {
+                NSLog("[PTIC] Rate limited (429) on attempt %d — extending cooldown to 30s", attempt)
+                inferenceCooldown = 30.0
+                if attempt < maxRetries {
+                    let delay = pow(2.0, Double(attempt - 1))
+                    try? await Task.sleep(for: .seconds(delay))
+                    continue
+                }
             } catch {
-                lastError = error
                 NSLog("[PTIC] Inference ERROR (attempt %d/%d): %@", attempt, maxRetries, String(describing: error))
                 if attempt < maxRetries {
-                    let backoff = Double(1 << (attempt - 1)) // 1s, 2s, 4s...
-                    NSLog("[PTIC] Backing off %.0fs before retry", backoff)
-                    try? await Task.sleep(for: .seconds(backoff))
+                    let delay = pow(2.0, Double(attempt - 1))
+                    try? await Task.sleep(for: .seconds(delay))
+                    continue
                 }
             }
         }
 
-        // All retries exhausted — show error
-        NSLog("[PTIC] All %d attempts failed — showing recognition error. Last error: %@",
-              maxRetries, String(describing: lastError))
+        // All retries exhausted — show error briefly
+        NSLog("[PTIC] Inference failed after %d attempts — showing recognition error", maxRetries)
         isDwelling = false
         showRecognitionError = true
         Task { @MainActor in
