@@ -147,7 +147,7 @@ final class AppState {
             NSLog("[PTIC] onDwellDetected EXIT — isIdentifying reset to false")
         }
 
-        let candidates = storeService.productKeys
+        let candidates = storeService.recognizableProductKeys
         NSLog("[PTIC] Store loaded=%d, candidates=%@",
               storeService.isLoaded ? 1 : 0,
               candidates.joined(separator: ", "))

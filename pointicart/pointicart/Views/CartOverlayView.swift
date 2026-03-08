@@ -99,6 +99,11 @@ struct CheckoutSheet: View {
                                 VStack(alignment: .leading, spacing: 2) {
                                     Text(item.product.name)
                                         .font(.subheadline.weight(.medium))
+                                    if let size = item.selectedSize {
+                                        Text(size.rawValue)
+                                            .font(.caption)
+                                            .foregroundStyle(.secondary)
+                                    }
                                     if item.quantity > 1 {
                                         Text("x\(item.quantity)")
                                             .font(.caption)
@@ -111,7 +116,26 @@ struct CheckoutSheet: View {
                                 Text(String(format: "$%.2f", item.subtotal))
                                     .font(.subheadline)
                                     .foregroundStyle(.secondary)
+
+                                Button {
+                                    withAnimation {
+                                        cartManager.remove(item.product.id)
+                                        if cartManager.isEmpty { dismiss() }
+                                    }
+                                } label: {
+                                    Image(systemName: "trash")
+                                        .font(.subheadline)
+                                        .foregroundStyle(.red.opacity(0.7))
+                                }
+                                .buttonStyle(.plain)
                             }
+                        }
+                        .onDelete { indexSet in
+                            for index in indexSet {
+                                let item = cartManager.items[index]
+                                cartManager.remove(item.product.id)
+                            }
+                            if cartManager.isEmpty { dismiss() }
                         }
                     }
 

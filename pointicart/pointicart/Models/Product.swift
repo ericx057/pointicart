@@ -10,7 +10,7 @@ struct Product: Identifiable, Hashable {
     let category: ProductCategory
     let availableSizes: [ProductSize]?
 
-    init(id: String, name: String, price: Double, imageSystemName: String, upsellId: String?,
+    init(id: String, name: String, price: Double, imageSystemName: String, upsellId: String? = nil,
          category: ProductCategory = .unsized, availableSizes: [ProductSize]? = nil) {
         self.id = id
         self.name = name

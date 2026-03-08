@@ -1,8 +1,8 @@
 import UIKit
 
 // MARK: - Gemini Multimodal Inference
-// Sends the full portrait-oriented camera frame to gemini-2.0-flash.
-// Returns the matched product key + a bounding box (0-1 normalized, portrait image space).
+// Sends the full portrait-oriented camera frame to gemini-2.5-flash.
+// Returns the matched clothing item key + a bounding box (0-1 normalized, portrait image space).
 
 final class GeminiInferenceService: InferenceService {
 
@@ -23,12 +23,12 @@ final class GeminiInferenceService: InferenceService {
         }
 
         // Downscale to max 768px on longest side to reduce token usage
-        let resized = Self.resizeImage(image, maxDimension: 512)
+        let resized = Self.resizeImage(image, maxDimension: 768)
         NSLog("[PTIC][Gemini] Resized from %.0fx%.0f to %.0fx%.0f",
               image.size.width, image.size.height,
               resized.size.width, resized.size.height)
 
-        guard let imageData = resized.jpegData(compressionQuality: 0.4) else {
+        guard let imageData = resized.jpegData(compressionQuality: 0.7) else {
             NSLog("[PTIC][Gemini] FAILED — jpegData returned nil")
             return nil
         }
@@ -42,19 +42,22 @@ final class GeminiInferenceService: InferenceService {
         // Ask Gemini to identify the product AND return its bounding box.
         // Box format: values 0-1000 (Gemini standard), origin top-left.
         let prompt = """
-        You are a product identifier for a retail store. \
-        Look at this image and identify if any of these products are visible: [\(candidateList)].
+        You are a clothing identifier for a retail clothing store. A customer is pointing at an article of clothing. \
+        Look at the center of this image and identify which ONE of these clothing items is most prominent: [\(candidateList)].
 
-        If you find one of the listed products, respond with ONLY valid JSON (no markdown, no explanation):
-        {"product": "Chair", "ymin": 200, "xmin": 100, "ymax": 800, "xmax": 900}
+        If you find one of the listed clothing items, respond with ONLY valid JSON (no markdown, no explanation):
+        {"product": "Jacket", "ymin": 200, "xmin": 100, "ymax": 800, "xmax": 900}
 
-        IMPORTANT: The "product" value must be the EXACT candidate name from the list above. \
-        Do NOT add adjectives, hyphens, or extra words. Use the candidate name exactly as listed.
+        IMPORTANT RULES:
+        - The "product" value must EXACTLY match one of the candidate names listed above.
+        - Do NOT add adjectives, hyphens, or extra words. Use the candidate name verbatim.
+        - Focus on the article of clothing near the center of the image, not background objects or people.
+        - Identify the clothing item itself (on a rack, mannequin, shelf, or being held), not what someone is wearing.
 
         The box values (ymin, xmin, ymax, xmax) are integers 0-1000 representing the bounding box \
-        of the detected product (0,0 = top-left of image, 1000,1000 = bottom-right).
+        of the detected clothing item (0,0 = top-left of image, 1000,1000 = bottom-right).
 
-        If NONE of the listed products are visible, respond with ONLY:
+        If NONE of the listed clothing items are clearly visible, respond with ONLY:
         {"product": "none"}
         """
 
@@ -72,10 +75,7 @@ final class GeminiInferenceService: InferenceService {
             ]],
             "generationConfig": [
                 "temperature": 0,
-                "maxOutputTokens": 1024,
-                "thinkingConfig": [
-                    "thinkingBudget": 0
-                ]
+                "maxOutputTokens": 1024
             ]
         ]
 
