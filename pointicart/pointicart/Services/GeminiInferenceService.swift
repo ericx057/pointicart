@@ -3,7 +3,7 @@ import UIKit
 // MARK: - Errors
 
 enum GeminiError: Error {
-    case rateLimited
+    case rateLimited(retryAfter: TimeInterval)
 }
 
 // MARK: - Gemini Multimodal Inference
@@ -93,7 +93,7 @@ final class GeminiInferenceService: InferenceService {
             ]],
             "generationConfig": [
                 "temperature": 0,
-                "maxOutputTokens": 256
+                "maxOutputTokens": 1024
             ]
         ]
 
@@ -122,10 +122,13 @@ final class GeminiInferenceService: InferenceService {
         guard statusCode == 200 else {
             if let body = String(data: data, encoding: .utf8) {
                 NSLog("[PTIC][Gemini] Error body: %@", body.prefix(500).description)
-            }
-            if statusCode == 429 {
-                NSLog("[PTIC][Gemini] Rate limited (429) — throwing GeminiError.rateLimited")
-                throw GeminiError.rateLimited
+                if statusCode == 429 {
+                    let retryAfter = Self.parseRetryAfter(from: body)
+                    NSLog("[PTIC][Gemini] Rate limited (429) — retry after %.1fs", retryAfter)
+                    throw GeminiError.rateLimited(retryAfter: retryAfter)
+                }
+            } else if statusCode == 429 {
+                throw GeminiError.rateLimited(retryAfter: 60)
             }
             return nil
         }
@@ -176,10 +179,27 @@ final class GeminiInferenceService: InferenceService {
 
         NSLog("[PTIC][Gemini] Cleaned JSON: %@", cleaned)
 
-        guard let jsonData = cleaned.data(using: .utf8),
-              let parsed = try? JSONSerialization.jsonObject(with: jsonData) as? [String: Any]
-        else {
-            NSLog("[PTIC][Gemini] FAILED — JSON parse failed for: %@", cleaned)
+        var parsed: [String: Any]?
+        if let jsonData = cleaned.data(using: .utf8) {
+            parsed = try? JSONSerialization.jsonObject(with: jsonData) as? [String: Any]
+        }
+
+        // Fallback: if JSON is truncated (MAX_TOKENS), extract product name with regex
+        if parsed == nil {
+            NSLog("[PTIC][Gemini] JSON parse failed — trying regex fallback on: %@", cleaned)
+            if let range = cleaned.range(of: #""product"\s*:\s*"([^"]+)""#, options: .regularExpression) {
+                let match = cleaned[range]
+                if let nameStart = match.range(of: #":\s*""#, options: .regularExpression)?.upperBound,
+                   let nameEnd = match[nameStart...].firstIndex(of: "\"") {
+                    let extractedName = String(match[nameStart..<nameEnd])
+                    NSLog("[PTIC][Gemini] Regex extracted product: %@", extractedName)
+                    parsed = ["product": extractedName]
+                }
+            }
+        }
+
+        guard let parsed else {
+            NSLog("[PTIC][Gemini] FAILED — could not extract product from: %@", cleaned)
             return nil
         }
 
@@ -226,6 +246,30 @@ final class GeminiInferenceService: InferenceService {
         }
 
         return IdentificationResult(productKey: matchedKey, normalizedBox: box)
+    }
+
+    // MARK: - Rate Limit Parsing
+
+    /// Extracts the retry delay from a 429 response body.
+    /// Looks for patterns like "retry in 58.3s" or "retryDelay":"58s" in the JSON.
+    nonisolated private static func parseRetryAfter(from body: String) -> TimeInterval {
+        // Try "retry in X.Xs" pattern from the human-readable message
+        let retryPattern = #"retry in (\d+(?:\.\d+)?)s"#
+        if let range = body.range(of: retryPattern, options: [.regularExpression, .caseInsensitive]),
+           let numRange = body[range].range(of: #"\d+(?:\.\d+)?"#, options: .regularExpression) {
+            if let seconds = Double(body[range][numRange]) {
+                return seconds + 1  // add 1s buffer
+            }
+        }
+        // Try "retryDelay":"58s" pattern from the error details JSON
+        let delayPattern = #""retryDelay"\s*:\s*"(\d+(?:\.\d+)?)s""#
+        if let range = body.range(of: delayPattern, options: .regularExpression),
+           let numRange = body[range].range(of: #"\d+(?:\.\d+)?"#, options: .regularExpression) {
+            if let seconds = Double(body[range][numRange]) {
+                return seconds + 1
+            }
+        }
+        return 60  // safe fallback
     }
 
     // MARK: - Image Resizing

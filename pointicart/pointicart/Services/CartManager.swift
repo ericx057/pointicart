@@ -76,6 +76,17 @@ final class CartManager {
         lastInteractionAt = Date()
     }
 
+    func updateSize(_ size: ProductSize, for productId: String) {
+        guard let index = items.firstIndex(where: { $0.product.id == productId }) else { return }
+        var updated = items
+        updated[index] = CartItem(
+            product: items[index].product,
+            quantity: items[index].quantity,
+            selectedSize: size
+        )
+        items = updated
+    }
+
     func clear() {
         items = []
         lastInteractionAt = nil

@@ -1,11 +1,19 @@
 import UIKit
 import Observation
 
+@MainActor
 @Observable
 final class AppState {
     let storeService = StoreService()
     let cartManager = CartManager()
-    let inferenceService: any InferenceService = CLIPInferenceService()
+    let inferenceService: any InferenceService = GeminiInferenceService(apiKey: Secrets.geminiAPIKey)
+    let tryOnService = VirtualTryOnService(
+        projectID: Secrets.gcpProjectID,
+        location: Secrets.gcpLocation,
+        clientID: Secrets.gcpClientID,
+        clientSecret: Secrets.gcpClientSecret,
+        refreshToken: Secrets.gcpRefreshToken
+    )
 
     // Recommendation engine services
     let vectorStore = InteractionVectorStore()
@@ -27,12 +35,24 @@ final class AppState {
     var isProductRecognized: Bool = false
     var showProductCard: Bool = false
     var showDirectCheckout: Bool = false
+    var lastIdentificationSnapshot: UIImage?
+
+    // Try-on mode
+    var isTryOnMode: Bool = false
+    var tryOnProduct: Product?
+    var tryOnProductImage: UIImage?
+    var tryOnResultImage: UIImage?
+    var capturedPersonImage: UIImage?
+    var isGeneratingTryOn: Bool = false
+    var tryOnError: String?
+
+    /// Set by ARCameraView so we can capture a frame on demand.
+    var captureSnapshot: (() -> UIImage?)?
+    /// Set by ARCameraView so we can adjust camera zoom (1.0 = default).
+    var applyZoom: ((CGFloat) -> Void)?
 
     // UX: Cart confirm flash (feature 7)
     var showCartConfirmFlash: Bool = false
-
-    // UX: Recognition failure
-    var showRecognitionError: Bool = false
 
     // UX: Position cache for instant re-identification (feature 1)
     private var positionCache: [String: PositionCacheEntry] = [:]
@@ -42,9 +62,20 @@ final class AppState {
     private var autoDismissTask: Task<Void, Never>?
     private let autoDismissDelay: TimeInterval = 4.0
 
-    // UX: Cooldown between inference calls (shorter for local model)
+    // UX: Cooldown between inference calls
     private var lastInferenceTime: Date = .distantPast
-    private var inferenceCooldown: TimeInterval = 5.0
+    private let inferenceCooldown: TimeInterval = 5.0
+
+    // Persistent rate-limit: survives app restarts so we don't immediately 429 on relaunch
+    private var rateLimitedUntil: Date {
+        get {
+            let ts = UserDefaults.standard.double(forKey: "ptic_rate_limited_until")
+            return ts > 0 ? Date(timeIntervalSince1970: ts) : .distantPast
+        }
+        set {
+            UserDefaults.standard.set(newValue.timeIntervalSince1970, forKey: "ptic_rate_limited_until")
+        }
+    }
 
     // Abandoned cart timer
     private var abandonedCartTask: Task<Void, Never>?
@@ -136,7 +167,12 @@ final class AppState {
               vectorStore.addFrequency,
               vectorStore.dwellCount)
 
-        return Array(storeService.suggestedProducts.prefix(maxCount))
+        // Only include products that have a loadable image asset
+        let withImages = storeService.suggestedProducts.filter { product in
+            guard let name = product.assetImageName else { return false }
+            return UIImage(named: name) != nil
+        }
+        return Array(withImages.prefix(maxCount))
     }
 
     // MARK: - URL Routing
@@ -163,19 +199,30 @@ final class AppState {
 
     func onDwellDetected(image: UIImage) async {
         NSLog("[PTIC] onDwellDetected ENTER — isIdentifying=%d", isIdentifying ? 1 : 0)
-        guard !isIdentifying else {
-            NSLog("[PTIC] onDwellDetected SKIP — already identifying")
+        guard !isIdentifying, !isTryOnMode else {
+            NSLog("[PTIC] onDwellDetected SKIP — already identifying or in try-on mode")
+            return
+        }
+
+        // Persistent rate-limit check (survives app restarts)
+        let now = Date()
+        let rateLimitRemaining = rateLimitedUntil.timeIntervalSince(now)
+        if rateLimitRemaining > 0 {
+            NSLog("[PTIC] onDwellDetected SKIP — rate limited for %.1fs more", rateLimitRemaining)
             return
         }
 
         // Cooldown: don't call Gemini more than once per inferenceCooldown seconds
-        let timeSinceLast = Date().timeIntervalSince(lastInferenceTime)
+        let timeSinceLast = now.timeIntervalSince(lastInferenceTime)
         guard timeSinceLast >= inferenceCooldown else {
             NSLog("[PTIC] onDwellDetected SKIP — cooldown (%.1fs since last call)", timeSinceLast)
             return
         }
 
-        let candidates = storeService.productKeys
+        // Only send main products (not upsell accessories) as candidates
+        let candidates = storeService.recognizableProductKeys.isEmpty
+            ? storeService.productKeys
+            : storeService.recognizableProductKeys
         guard !candidates.isEmpty else {
             NSLog("[PTIC] onDwellDetected SKIP — no candidates (store not loaded)")
             return
@@ -224,10 +271,9 @@ final class AppState {
             return
         }
 
-        // No cache hit — call Gemini inference with retries
+        // No cache hit — call Gemini
         isIdentifying = true
         lastInferenceTime = Date()
-        showRecognitionError = false
         defer {
             isIdentifying = false
             NSLog("[PTIC] onDwellDetected EXIT — isIdentifying reset to false")
@@ -245,77 +291,60 @@ final class AppState {
         NSLog("[PTIC] Sending image %.0fx%.0f to Gemini with %d candidates (%d with descriptions)",
               image.size.width, image.size.height, candidates.count, descriptions.count)
 
-        // Retry up to 3 times with exponential backoff (1s, 2s, 4s)
-        let maxRetries = 3
-        for attempt in 1...maxRetries {
-            do {
-                let result = try await inferenceService.identify(
-                    image: image,
-                    candidates: candidates,
-                    candidateDescriptions: descriptions
-                )
-                NSLog("[PTIC] Inference result (attempt %d): %@", attempt, String(describing: result?.productKey))
-                if let result, storeService.product(forKey: result.productKey) != nil {
-                    identifiedProductKey = result.productKey
-                    identifiedPosition = capturedPosition
+        do {
+            let result = try await inferenceService.identify(
+                image: image,
+                candidates: candidates,
+                candidateDescriptions: descriptions
+            )
+            NSLog("[PTIC] Inference result: %@", String(describing: result?.productKey))
+            if let result, storeService.product(forKey: result.productKey) != nil {
+                identifiedProductKey = result.productKey
+                identifiedPosition = capturedPosition
 
-                    // Convert normalized bounding box (0-1) to screen-space
-                    if let normalizedBox = result.normalizedBox {
-                        identifiedBoundingBox = Self.screenRect(
-                            fromNormalized: normalizedBox,
-                            imageSize: image.size
-                        )
-                    } else {
-                        identifiedBoundingBox = nil
-                    }
-
-                    isProductRecognized = true
-                    showProductCard = true
-                    NSLog("[PTIC] Product recognized: %@ — showProductCard=true", result.productKey)
-
-                    // Cache this identification (feature 1)
-                    cacheIdentification(
-                        productKey: result.productKey,
-                        position: capturedPosition,
-                        boundingBox: identifiedBoundingBox
+                // Convert normalized bounding box (0-1) to screen-space
+                if let normalizedBox = result.normalizedBox {
+                    identifiedBoundingBox = Self.screenRect(
+                        fromNormalized: normalizedBox,
+                        imageSize: image.size
                     )
-
-                    // Feature 5: Start auto-dismiss timer
-                    startAutoDismissTimer()
-
-                    // Record browsing behavior for recommendation engine
-                    vectorStore.recordDwell()
-                    vectorStore.recordProductView(productKey: result.productKey)
-                    return
                 } else {
-                    NSLog("[PTIC] No matching product in store for result")
+                    identifiedBoundingBox = nil
                 }
-                break  // No error — don't retry on a valid "no match" response
-            } catch let error as GeminiError where error == .rateLimited {
-                NSLog("[PTIC] Rate limited (429) on attempt %d — extending cooldown to 30s", attempt)
-                inferenceCooldown = 30.0
-                if attempt < maxRetries {
-                    let delay = pow(2.0, Double(attempt - 1))
-                    try? await Task.sleep(for: .seconds(delay))
-                    continue
-                }
-            } catch {
-                NSLog("[PTIC] Inference ERROR (attempt %d/%d): %@", attempt, maxRetries, String(describing: error))
-                if attempt < maxRetries {
-                    let delay = pow(2.0, Double(attempt - 1))
-                    try? await Task.sleep(for: .seconds(delay))
-                    continue
-                }
-            }
-        }
 
-        // All retries exhausted — show error briefly
-        NSLog("[PTIC] Inference failed after %d attempts — showing recognition error", maxRetries)
-        isDwelling = false
-        showRecognitionError = true
-        Task { @MainActor in
-            try? await Task.sleep(for: .seconds(3))
-            showRecognitionError = false
+                isProductRecognized = true
+                showProductCard = true
+                lastIdentificationSnapshot = image
+                NSLog("[PTIC] Product recognized: %@ — showProductCard=true", result.productKey)
+
+                // Cache this identification (feature 1)
+                cacheIdentification(
+                    productKey: result.productKey,
+                    position: capturedPosition,
+                    boundingBox: identifiedBoundingBox
+                )
+
+                // Feature 5: Start auto-dismiss timer
+                startAutoDismissTimer()
+
+                // Record browsing behavior for recommendation engine
+                vectorStore.recordDwell()
+                vectorStore.recordProductView(productKey: result.productKey)
+            } else {
+                // Valid response, just no product matched — NOT an error
+                NSLog("[PTIC] No matching product visible — this is normal")
+                isDwelling = false
+            }
+        } catch GeminiError.rateLimited(let retryAfter) {
+            NSLog("[PTIC] RATE LIMITED (429) — blocking inference for %.1fs (persisted)", retryAfter)
+            isDwelling = false
+            isProductRecognized = false
+            // Persist the rate-limit expiry so it survives app restarts
+            rateLimitedUntil = Date().addingTimeInterval(retryAfter)
+        } catch {
+            NSLog("[PTIC] Inference ERROR: %@", String(describing: error))
+            isDwelling = false
+            isProductRecognized = false
         }
     }
 
@@ -382,6 +411,85 @@ final class AppState {
         identifiedBoundingBox = nil
         isProductRecognized = false
         isDwelling = false
+        lastIdentificationSnapshot = nil
+    }
+
+    // MARK: - Try-On Mode
+
+    func enterTryOnMode(product: Product, snapshot: UIImage?, boundingBox: CGRect?) {
+        if let assetName = product.assetImageName, let assetImage = UIImage(named: assetName) {
+            tryOnProductImage = assetImage
+        } else if let snapshot, let box = boundingBox {
+            tryOnProductImage = Self.cropImage(snapshot, to: box)
+        } else {
+            tryOnProductImage = nil
+        }
+        tryOnProduct = product
+        tryOnResultImage = nil
+        tryOnError = nil
+        isTryOnMode = true
+        isGeneratingTryOn = false
+        dismissProductCard()
+        NSLog("[PTIC] Entered try-on mode for: %@", product.name)
+    }
+
+    func exitTryOnMode() {
+        isTryOnMode = false
+        tryOnProduct = nil
+        tryOnProductImage = nil
+        tryOnResultImage = nil
+        capturedPersonImage = nil
+        isGeneratingTryOn = false
+        tryOnError = nil
+        applyZoom?(1.0)
+        NSLog("[PTIC] Exited try-on mode")
+    }
+
+    func captureAndGenerateTryOn() {
+        guard let snapshot = captureSnapshot?() else {
+            tryOnError = "Could not capture camera frame"
+            NSLog("[PTIC] TryOn capture failed — no snapshot")
+            return
+        }
+        guard let productImage = tryOnProductImage else {
+            tryOnError = "No product image available"
+            NSLog("[PTIC] TryOn capture failed — no product image")
+            return
+        }
+
+        capturedPersonImage = snapshot
+        isGeneratingTryOn = true
+        tryOnError = nil
+        NSLog("[PTIC] TryOn: captured person %.0fx%.0f, sending to API...",
+              snapshot.size.width, snapshot.size.height)
+
+        Task { @MainActor in
+            do {
+                let result = try await tryOnService.tryOn(
+                    personImage: snapshot,
+                    productImage: productImage
+                )
+                tryOnResultImage = result
+                isGeneratingTryOn = false
+                NSLog("[PTIC] TryOn: generated result %.0fx%.0f", result.size.width, result.size.height)
+            } catch {
+                isGeneratingTryOn = false
+                tryOnError = error.localizedDescription
+                NSLog("[PTIC] TryOn ERROR: %@", String(describing: error))
+            }
+        }
+    }
+
+    private static func cropImage(_ image: UIImage, to screenRect: CGRect) -> UIImage? {
+        let scale = image.scale
+        let cropRect = CGRect(
+            x: screenRect.minX * scale,
+            y: screenRect.minY * scale,
+            width: screenRect.width * scale,
+            height: screenRect.height * scale
+        )
+        guard let cgImage = image.cgImage?.cropping(to: cropRect) else { return nil }
+        return UIImage(cgImage: cgImage, scale: scale, orientation: image.imageOrientation)
     }
 
     // MARK: - Coordinate Mapping
@@ -417,17 +525,16 @@ final class AppState {
 
     func startAbandonedCartTimer() {
         abandonedCartTask?.cancel()
+        NotificationService.cancelAbandonedCartReminders()
         abandonedCartTask = Task {
-            try? await Task.sleep(for: .seconds(60))
-            guard !Task.isCancelled, !cartManager.isEmpty else { return }
-
             let granted = await NotificationService.requestPermission()
-            guard granted else { return }
+            guard granted, !Task.isCancelled, !cartManager.isEmpty else { return }
 
             NotificationService.scheduleAbandonedCartReminder(
                 storeName: storeService.storeName,
                 productName: cartManager.firstProductName ?? "your items",
-                cartItemIds: cartManager.itemIds
+                cartItemIds: cartManager.itemIds,
+                delayMinutes: 120
             )
         }
     }

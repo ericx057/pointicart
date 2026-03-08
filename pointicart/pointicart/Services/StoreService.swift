@@ -80,13 +80,12 @@ final class StoreService {
     }
 
     private func buildSuggestedProducts() -> [Product] {
+        // Hardcoded demo recommendations revealed in order of time spent in store:
+        // 1st shown: Beanie, 2nd: Pants, 3rd: Sneakers
         [
-            Product(id: "sg_01", name: "Sunglasses", price: 49.99, imageSystemName: "eyeglasses", category: .accessories),
-            Product(id: "sg_02", name: "Watch", price: 149.99, imageSystemName: "applewatch", category: .accessories),
-            Product(id: "sg_03", name: "Handbag", price: 89.99, imageSystemName: "handbag.fill", category: .accessories),
-            Product(id: "sg_04", name: "Gloves", price: 29.99, imageSystemName: "hand.raised", category: .accessories),
-            Product(id: "sg_05", name: "Socks", price: 12.99, imageSystemName: "shoeprint.fill", category: .apparel),
-            Product(id: "sg_06", name: "Tank Top", price: 24.99, imageSystemName: "tshirt", category: .apparel, availableSizes: ProductSize.allCases),
+            Product(id: "sg_beanie", name: "Beanie", price: 22.99, assetImageName: "suggest_beanie", category: .accessories),
+            Product(id: "sg_pants", name: "Pants", price: 59.99, assetImageName: "suggest_pants", category: .apparel, availableSizes: ProductSize.allCases),
+            Product(id: "sg_sneakers", name: "Sneakers", price: 109.99, assetImageName: "suggest_sneakers", category: .footwear, availableSizes: ProductSize.allCases),
         ]
     }
 }

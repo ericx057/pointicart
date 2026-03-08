@@ -66,13 +66,26 @@ struct ContentView: View {
                         onDismiss: {
                             appState.cancelAutoDismissTimer()
                             withAnimation(.spring(duration: 0.3)) { appState.dismissProductCard() }
-                        }
+                        },
+                        onTryOn: product.category == .apparel ? {
+                            appState.cancelAutoDismissTimer()
+                            appState.enterTryOnMode(
+                                product: product,
+                                snapshot: appState.lastIdentificationSnapshot,
+                                boundingBox: appState.identifiedBoundingBox
+                            )
+                        } : nil
                     )
                     .frame(width: geo.size.width, height: geo.size.height)
                     .transition(.asymmetric(
                         insertion: .scale(scale: 0.95).combined(with: .opacity),
                         removal: .opacity
                     ))
+                }
+
+                // Layer 3.5: Try-on mode overlay
+                if appState.isTryOnMode {
+                    TryOnOverlay(appState: appState)
                 }
 
                 // Layer 4: Cart overlay (bottom bar)
@@ -87,25 +100,7 @@ struct ContentView: View {
                     onPaymentComplete: { appState.onSessionPaymentComplete() }
                 )
 
-                // Layer 5: Recognition error message
-                if appState.showRecognitionError {
-                    VStack {
-                        Text("Object not recognized")
-                            .font(.subheadline.weight(.semibold))
-                            .foregroundStyle(.white)
-                            .padding(.horizontal, 20)
-                            .padding(.vertical, 12)
-                            .background(.ultraThinMaterial, in: Capsule())
-                            .overlay(Capsule().stroke(.white.opacity(0.2), lineWidth: 0.5))
-                            .shadow(color: .black.opacity(0.3), radius: 10, y: 4)
-                        Spacer()
-                    }
-                    .padding(.top, 60)
-                    .transition(.move(edge: .top).combined(with: .opacity))
-                    .animation(.spring(duration: 0.35), value: appState.showRecognitionError)
-                }
-
-                // Layer 6: Store loading prompt (if no store loaded)
+                // Layer 5: Store loading prompt (if no store loaded)
                 if !appState.storeService.isLoaded {
                     StoreLoadingPrompt(appState: appState)
                 }
@@ -113,6 +108,7 @@ struct ContentView: View {
         }
         .ignoresSafeArea()
         .animation(.spring(duration: 0.35), value: appState.showProductCard)
+        .animation(.spring(duration: 0.4), value: appState.isTryOnMode)
         .sheet(isPresented: $appState.showDirectCheckout) {
             CheckoutSheet(
                 cartManager: appState.cartManager,
@@ -205,6 +201,7 @@ struct ObjectHighlightOverlay: View {
     let onIncrement: () -> Void
     let onDecrement: () -> Void
     let onDismiss: () -> Void
+    var onTryOn: (() -> Void)? = nil
 
     @State private var appear = false
     @State private var measuredCardHeight: CGFloat = 180
@@ -310,7 +307,8 @@ struct ObjectHighlightOverlay: View {
                 onBuyNow: onBuyNow,
                 onIncrement: onIncrement,
                 onDecrement: onDecrement,
-                onDismiss: onDismiss
+                onDismiss: onDismiss,
+                onTryOn: onTryOn
             )
             .frame(width: cardWidth)
             .background(
@@ -391,6 +389,7 @@ struct FloatingProductCard: View {
     let onIncrement: () -> Void
     let onDecrement: () -> Void
     let onDismiss: () -> Void
+    var onTryOn: (() -> Void)? = nil
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -469,6 +468,28 @@ struct FloatingProductCard: View {
                         .overlay(
                             RoundedRectangle(cornerRadius: 14, style: .continuous)
                                 .stroke(.white.opacity(0.3), lineWidth: 0.5)
+                        )
+                }
+            }
+
+            // Try On button — only shown for the demo sweater
+            if let tryOn = onTryOn {
+                Button(action: tryOn) {
+                    Label("Try On", systemImage: "figure.arms.open")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.white)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 12)
+                        .background(
+                            LinearGradient(
+                                colors: [.purple.opacity(0.5), .blue.opacity(0.4)],
+                                startPoint: .leading, endPoint: .trailing
+                            ),
+                            in: RoundedRectangle(cornerRadius: 14, style: .continuous)
+                        )
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                                .stroke(.white.opacity(0.25), lineWidth: 0.5)
                         )
                 }
             }

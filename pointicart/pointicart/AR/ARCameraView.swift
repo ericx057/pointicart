@@ -1,5 +1,6 @@
 @preconcurrency import ARKit
 @preconcurrency import Vision
+import AVFoundation
 import SwiftUI
 
 struct ARCameraView: UIViewRepresentable {
@@ -16,6 +17,34 @@ struct ARCameraView: UIViewRepresentable {
         sceneView.session.run(config)
 
         context.coordinator.sceneView = sceneView
+
+        // Provide on-demand snapshot capture to AppState for virtual try-on
+        appState.captureSnapshot = { [weak sceneView] in
+            guard let buffer = sceneView?.session.currentFrame?.capturedImage else { return nil }
+            let lockStatus = CVPixelBufferLockBaseAddress(buffer, .readOnly)
+            guard lockStatus == kCVReturnSuccess else { return nil }
+            let ciImage = CIImage(cvPixelBuffer: buffer).oriented(.right)
+            let ctx = CIContext()
+            let cgImage = ctx.createCGImage(ciImage, from: ciImage.extent)
+            CVPixelBufferUnlockBaseAddress(buffer, .readOnly)
+            guard let cgImage else { return nil }
+            return UIImage(cgImage: cgImage)
+        }
+
+        // Camera zoom via AVCaptureDevice (works alongside ARKit)
+        appState.applyZoom = { factor in
+            guard let device = AVCaptureDevice.default(.builtInWideAngleCamera,
+                                                       for: .video,
+                                                       position: .back) else { return }
+            do {
+                try device.lockForConfiguration()
+                device.videoZoomFactor = max(1.0, min(factor, device.activeFormat.videoMaxZoomFactor))
+                device.unlockForConfiguration()
+            } catch {
+                NSLog("[PTIC] Zoom error: %@", String(describing: error))
+            }
+        }
+
         NSLog("[PTIC] ARCameraView makeUIView complete, sceneView assigned")
         return sceneView
     }
@@ -89,7 +118,7 @@ struct ARCameraView: UIViewRepresentable {
                 if dist < 30 {
                     if let start = dwellStart {
                         let elapsed = Date().timeIntervalSince(start)
-                        if elapsed >= 0.8 && !hasFiredDwell {
+                        if elapsed >= 0.5 && !hasFiredDwell {
                             NSLog("[PTIC] DWELL FIRED — elapsed=%.2fs, storeLoaded=%d, candidates=%d",
                                   elapsed,
                                   appState.storeService.isLoaded ? 1 : 0,
@@ -132,34 +161,10 @@ struct ARCameraView: UIViewRepresentable {
             let extent = ciImage.extent
             NSLog("[PTIC] CIImage extent: %@", NSCoder.string(for: extent))
 
-            // Crop around the fingertip so Gemini focuses on what the user is pointing at.
-            // Map screen position to image-pixel position, then take a region around it.
-            let cropRect: CGRect
-            if let tip = lastPosition, let bounds = sceneView?.bounds, bounds.width > 0, bounds.height > 0 {
-                // Screen-point → normalized (0-1)
-                let nx = tip.x / bounds.width
-                let ny = tip.y / bounds.height
-
-                // Normalized → image-pixel (portrait oriented image)
-                let imgX = nx * extent.width
-                let imgY = ny * extent.height
-
-                // Crop a square region around the finger (40% of the shorter dimension)
-                let cropSize = min(extent.width, extent.height) * 0.5
-                let half = cropSize / 2.0
-                let rawRect = CGRect(x: imgX - half, y: imgY - half, width: cropSize, height: cropSize)
-
-                // Clamp to image bounds
-                cropRect = rawRect.intersection(extent)
-                NSLog("[PTIC] Cropping around fingertip: screen=(%.0f,%.0f) img=(%.0f,%.0f) crop=%@",
-                      tip.x, tip.y, imgX, imgY, NSCoder.string(for: cropRect))
-            } else {
-                cropRect = extent
-                NSLog("[PTIC] No fingertip — using full image")
-            }
-
+            // Send the full portrait-rotated frame — Gemini needs full context to identify
+            // products and return accurate bounding boxes in image-space coordinates.
             let ctx = CIContext()
-            let cgImage = ctx.createCGImage(ciImage, from: cropRect)
+            let cgImage = ctx.createCGImage(ciImage, from: extent)
             CVPixelBufferUnlockBaseAddress(currentBuffer, .readOnly)
 
             guard let cgImage else {

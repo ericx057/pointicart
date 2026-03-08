@@ -99,10 +99,28 @@ struct CheckoutSheet: View {
                                 VStack(alignment: .leading, spacing: 2) {
                                     Text(item.product.name)
                                         .font(.subheadline.weight(.medium))
-                                    if let size = item.selectedSize {
-                                        Text(size.rawValue)
-                                            .font(.caption)
+                                    if let sizes = item.product.availableSizes, !sizes.isEmpty {
+                                        Menu {
+                                            ForEach(sizes, id: \.self) { size in
+                                                Button {
+                                                    cartManager.updateSize(size, for: item.product.id)
+                                                } label: {
+                                                    if item.selectedSize == size {
+                                                        Label(size.rawValue, systemImage: "checkmark")
+                                                    } else {
+                                                        Text(size.rawValue)
+                                                    }
+                                                }
+                                            }
+                                        } label: {
+                                            HStack(spacing: 3) {
+                                                Text(item.selectedSize?.rawValue ?? "Size")
+                                                    .font(.caption)
+                                                Image(systemName: "chevron.up.chevron.down")
+                                                    .font(.system(size: 8))
+                                            }
                                             .foregroundStyle(.secondary)
+                                        }
                                     }
                                     if item.quantity > 1 {
                                         Text("x\(item.quantity)")
@@ -139,48 +157,22 @@ struct CheckoutSheet: View {
                         }
                     }
 
-                    // Recommended product (paired upsell)
-                    if let suggested = suggestedProduct, !addedSuggestion {
-                        Section("Recommended") {
-                            HStack(spacing: 12) {
-                                ProductImageView(product: suggested, size: 36, color: .secondary)
-
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text(suggested.name)
-                                        .font(.subheadline.weight(.medium))
-                                    Text("Often paired with your items")
-                                        .font(.caption)
-                                        .foregroundStyle(.secondary)
-                                }
-
-                                Spacer()
-
-                                Button {
-                                    onAddSuggested(suggested)
-                                    withAnimation { addedSuggestion = true }
-                                } label: {
-                                    Text("Add  \(suggested.formattedPrice)")
-                                        .font(.caption.weight(.semibold))
-                                        .padding(.horizontal, 12)
-                                        .padding(.vertical, 6)
-                                }
-                                .buttonStyle(.borderedProminent)
-                                .tint(.primary.opacity(0.85))
-                                .controlSize(.small)
-                            }
-                        }
-                    }
-
-                    // Suggested products carousel
-                    if !visibleSuggestedProducts.isEmpty {
-                        Section("You Might Also Like") {
+                    // Combined recommendations section
+                    if !allRecommendedProducts.isEmpty {
+                        Section("Recommendations") {
                             ScrollView(.horizontal, showsIndicators: false) {
                                 HStack(spacing: 12) {
-                                    ForEach(visibleSuggestedProducts) { product in
-                                        SuggestedProductCard(product: product) {
-                                            onAddSuggested(product)
-                                            withAnimation {
-                                                addedSuggestedIds.insert(product.id)
+                                    ForEach(allRecommendedProducts) { product in
+                                        SuggestedProductCard(
+                                            product: product,
+                                            subtitle: (product.id == suggestedProduct?.id && upsellVisible) ? "Often paired with your items" : nil
+                                        ) {
+                                            if product.id == suggestedProduct?.id && upsellVisible {
+                                                onAddSuggested(product)
+                                                withAnimation { addedSuggestion = true }
+                                            } else {
+                                                onAddSuggested(product)
+                                                withAnimation { addedSuggestedIds.insert(product.id) }
                                             }
                                         }
                                     }
@@ -251,6 +243,17 @@ struct CheckoutSheet: View {
             !cartIds.contains(product.id) && !addedSuggestedIds.contains(product.id)
         }
     }
+
+    private var allRecommendedProducts: [Product] {
+        var list: [Product] = []
+        if let up = suggestedProduct, !addedSuggestion { list.append(up) }
+        list.append(contentsOf: visibleSuggestedProducts)
+        return list
+    }
+
+    private var upsellVisible: Bool {
+        suggestedProduct != nil && !addedSuggestion
+    }
 }
 
 // MARK: - Product Image View
@@ -281,6 +284,7 @@ struct ProductImageView: View {
 
 struct SuggestedProductCard: View {
     let product: Product
+    var subtitle: String? = nil
     let onAdd: () -> Void
 
     var body: some View {
@@ -302,6 +306,14 @@ struct SuggestedProductCard: View {
             Text(product.name)
                 .font(.caption.weight(.medium))
                 .lineLimit(1)
+
+            if let sub = subtitle {
+                Text(sub)
+                    .font(.caption2)
+                    .foregroundStyle(.blue)
+                    .lineLimit(2)
+                    .multilineTextAlignment(.center)
+            }
 
             Text(product.formattedPrice)
                 .font(.caption2)
