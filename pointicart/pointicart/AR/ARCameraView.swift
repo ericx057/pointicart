@@ -1,5 +1,6 @@
 @preconcurrency import ARKit
 @preconcurrency import Vision
+import AVFoundation
 import SwiftUI
 
 struct ARCameraView: UIViewRepresentable {
@@ -16,6 +17,34 @@ struct ARCameraView: UIViewRepresentable {
         sceneView.session.run(config)
 
         context.coordinator.sceneView = sceneView
+
+        // Provide on-demand snapshot capture to AppState for virtual try-on
+        appState.captureSnapshot = { [weak sceneView] in
+            guard let buffer = sceneView?.session.currentFrame?.capturedImage else { return nil }
+            let lockStatus = CVPixelBufferLockBaseAddress(buffer, .readOnly)
+            guard lockStatus == kCVReturnSuccess else { return nil }
+            let ciImage = CIImage(cvPixelBuffer: buffer).oriented(.right)
+            let ctx = CIContext()
+            let cgImage = ctx.createCGImage(ciImage, from: ciImage.extent)
+            CVPixelBufferUnlockBaseAddress(buffer, .readOnly)
+            guard let cgImage else { return nil }
+            return UIImage(cgImage: cgImage)
+        }
+
+        // Camera zoom via AVCaptureDevice (works alongside ARKit).
+        appState.applyZoom = { factor in
+            guard let device = AVCaptureDevice.default(.builtInWideAngleCamera,
+                                                       for: .video,
+                                                       position: .back) else { return }
+            do {
+                try device.lockForConfiguration()
+                device.videoZoomFactor = max(1.0, min(factor, device.activeFormat.videoMaxZoomFactor))
+                device.unlockForConfiguration()
+            } catch {
+                NSLog("[PTIC] Zoom error: %@", String(describing: error))
+            }
+        }
+
         NSLog("[PTIC] ARCameraView makeUIView complete, sceneView assigned")
         return sceneView
     }
@@ -57,6 +86,8 @@ struct ARCameraView: UIViewRepresentable {
 
             Task { @MainActor [weak self] in
                 guard let self else { return }
+                defer { self.isProcessing = false }
+
                 let normalizedPoint = await Self.detectIndexTip(in: pixelBuffer)
                 self.processTipResult(normalizedPoint, pixelBuffer: pixelBuffer)
             }
@@ -68,7 +99,6 @@ struct ARCameraView: UIViewRepresentable {
                 appState.isDwelling = false
                 dwellStart = nil
                 hasFiredDwell = false
-                isProcessing = false
                 return
             }
 
@@ -104,7 +134,6 @@ struct ARCameraView: UIViewRepresentable {
                 }
             }
             lastPosition = screenPoint
-            isProcessing = false
         }
 
         private func fireDwellIdentification() {
@@ -167,5 +196,6 @@ struct ARCameraView: UIViewRepresentable {
 
             return indexTip.location
         }
+
     }
 }

@@ -6,6 +6,13 @@ final class AppState {
     let storeService = StoreService()
     let cartManager = CartManager()
     let inferenceService: any InferenceService = GeminiInferenceService(apiKey: Secrets.geminiAPIKey)
+    let tryOnService = VirtualTryOnService(
+        projectID: Secrets.gcpProjectID,
+        location: Secrets.gcpLocation,
+        clientID: Secrets.gcpClientID,
+        clientSecret: Secrets.gcpClientSecret,
+        refreshToken: Secrets.gcpRefreshToken
+    )
 
     // Hand tracking state
     var fingertipPosition: CGPoint?
@@ -19,6 +26,21 @@ final class AppState {
     var isProductRecognized: Bool = false
     var showProductCard: Bool = false
     var showDirectCheckout: Bool = false
+    var lastIdentificationSnapshot: UIImage?  // kept for try-on cropping
+
+    // Try-on mode
+    var isTryOnMode: Bool = false
+    var tryOnProduct: Product?
+    var tryOnProductImage: UIImage?       // clean clothing image for the API
+    var tryOnResultImage: UIImage?        // generated try-on composite
+    var capturedPersonImage: UIImage?     // frozen camera frame shown during generation
+    var isGeneratingTryOn: Bool = false
+    var tryOnError: String?
+
+    /// Set by ARCameraView so we can capture a frame on demand.
+    var captureSnapshot: (() -> UIImage?)?
+    /// Set by ARCameraView so we can adjust camera zoom (1.0 = default).
+    var applyZoom: ((CGFloat) -> Void)?
 
     // Abandoned cart timer
     private var abandonedCartTask: Task<Void, Never>?
@@ -57,8 +79,8 @@ final class AppState {
 
     func onDwellDetected(image: UIImage) async {
         NSLog("[PTIC] onDwellDetected ENTER — isIdentifying=%d", isIdentifying ? 1 : 0)
-        guard !isIdentifying else {
-            NSLog("[PTIC] onDwellDetected SKIP — already identifying")
+        guard !isIdentifying, !isTryOnMode else {
+            NSLog("[PTIC] onDwellDetected SKIP — already identifying or in try-on mode")
             return
         }
         isIdentifying = true
@@ -92,6 +114,7 @@ final class AppState {
                 }
                 isProductRecognized = true
                 showProductCard = true
+                lastIdentificationSnapshot = image
                 NSLog("[PTIC] Product recognized: %@ — showProductCard=true", result.productKey)
             } else {
                 NSLog("[PTIC] No matching product in store for result")
@@ -111,6 +134,90 @@ final class AppState {
         identifiedBoundingBox = nil
         isProductRecognized = false
         isDwelling = false
+        lastIdentificationSnapshot = nil
+    }
+
+    // MARK: - Try-On Mode
+
+    func enterTryOnMode(product: Product, snapshot: UIImage?, boundingBox: CGRect?) {
+        // Prefer bundled asset image for try-on; fall back to camera crop
+        if let assetName = product.tryOnImageName, let assetImage = UIImage(named: assetName) {
+            tryOnProductImage = assetImage
+        } else if let snapshot, let box = boundingBox {
+            tryOnProductImage = Self.cropImage(snapshot, to: box)
+        } else {
+            tryOnProductImage = nil
+        }
+        tryOnProduct = product
+        tryOnResultImage = nil
+        tryOnError = nil
+        isTryOnMode = true
+        isGeneratingTryOn = false
+        dismissProductCard()
+        NSLog("[PTIC] Entered try-on mode for: %@", product.name)
+    }
+
+    func exitTryOnMode() {
+        isTryOnMode = false
+        tryOnProduct = nil
+        tryOnProductImage = nil
+        tryOnResultImage = nil
+        capturedPersonImage = nil
+        isGeneratingTryOn = false
+        tryOnError = nil
+        applyZoom?(1.0) // reset camera zoom
+        NSLog("[PTIC] Exited try-on mode")
+    }
+
+    /// Called when the user taps "Take Photo" in try-on mode.
+    /// Captures the current AR frame, freezes it on screen, and sends it + the product image to Gemini.
+    func captureAndGenerateTryOn() {
+        guard let snapshot = captureSnapshot?() else {
+            tryOnError = "Could not capture camera frame"
+            NSLog("[PTIC] TryOn capture failed — no snapshot")
+            return
+        }
+
+        guard let productImage = tryOnProductImage else {
+            tryOnError = "No product image available"
+            NSLog("[PTIC] TryOn capture failed — no product image")
+            return
+        }
+
+        capturedPersonImage = snapshot
+        isGeneratingTryOn = true
+        tryOnError = nil
+        NSLog("[PTIC] TryOn: captured person %.0fx%.0f, sending to API...",
+              snapshot.size.width, snapshot.size.height)
+
+        Task { @MainActor in
+            do {
+                let result = try await tryOnService.tryOn(
+                    personImage: snapshot,
+                    productImage: productImage
+                )
+                tryOnResultImage = result
+                isGeneratingTryOn = false
+                NSLog("[PTIC] TryOn: generated result %.0fx%.0f", result.size.width, result.size.height)
+            } catch {
+                isGeneratingTryOn = false
+                tryOnError = error.localizedDescription
+                NSLog("[PTIC] TryOn ERROR: %@", String(describing: error))
+            }
+        }
+    }
+
+    /// Crop a region from a UIImage given a screen-rect.
+    private static func cropImage(_ image: UIImage, to screenRect: CGRect) -> UIImage? {
+        let scale = image.scale
+        let cropRect = CGRect(
+            x: screenRect.minX * scale,
+            y: screenRect.minY * scale,
+            width: screenRect.width * scale,
+            height: screenRect.height * scale
+        )
+        guard let cgImage = image.cgImage?.cropping(to: cropRect) else { return nil }
+        return UIImage(cgImage: cgImage, scale: scale, orientation: image.imageOrientation)
     }
 
     // MARK: - Coordinate Mapping
