@@ -181,8 +181,11 @@ struct ObjectHighlightOverlay: View {
     let boundingBox: CGRect?
     let fallbackPosition: CGPoint?
     let screenSize: CGSize
+    let cartQuantity: Int
     let onAddToCart: () -> Void
     let onBuyNow: () -> Void
+    let onIncrement: () -> Void
+    let onDecrement: () -> Void
     let onDismiss: () -> Void
 
     @State private var appear = false
@@ -284,8 +287,11 @@ struct ObjectHighlightOverlay: View {
             // Floating product card
             FloatingProductCard(
                 product: product,
+                cartQuantity: cartQuantity,
                 onAddToCart: onAddToCart,
                 onBuyNow: onBuyNow,
+                onIncrement: onIncrement,
+                onDecrement: onDecrement,
                 onDismiss: onDismiss
             )
             .frame(width: cardWidth)
@@ -361,8 +367,11 @@ struct ConnectorLine: View {
 
 struct FloatingProductCard: View {
     let product: Product
+    let cartQuantity: Int
     let onAddToCart: () -> Void
     let onBuyNow: () -> Void
+    let onIncrement: () -> Void
+    let onDecrement: () -> Void
     let onDismiss: () -> Void
 
     var body: some View {
@@ -392,17 +401,44 @@ struct FloatingProductCard: View {
 
             // Actions — side by side for fewer taps
             HStack(spacing: 10) {
-                Button(action: onAddToCart) {
-                    Text("Add to Cart")
-                        .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(.white)
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 12)
-                        .background(.white.opacity(0.15), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                                .stroke(.white.opacity(0.2), lineWidth: 0.5)
-                        )
+                if cartQuantity > 0 {
+                    HStack(spacing: 0) {
+                        Button(action: onDecrement) {
+                            Image(systemName: "minus")
+                                .font(.subheadline.weight(.semibold))
+                                .foregroundStyle(.white)
+                                .frame(width: 40, height: 40)
+                        }
+                        Text("\(cartQuantity)")
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(.white)
+                            .frame(minWidth: 28)
+                        Button(action: onIncrement) {
+                            Image(systemName: "plus")
+                                .font(.subheadline.weight(.semibold))
+                                .foregroundStyle(.white)
+                                .frame(width: 40, height: 40)
+                        }
+                    }
+                    .frame(maxWidth: .infinity)
+                    .background(.white.opacity(0.15), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 14, style: .continuous)
+                            .stroke(.white.opacity(0.2), lineWidth: 0.5)
+                    )
+                } else {
+                    Button(action: onAddToCart) {
+                        Text("Add to Cart")
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(.white)
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 12)
+                            .background(.white.opacity(0.15), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                                    .stroke(.white.opacity(0.2), lineWidth: 0.5)
+                            )
+                    }
                 }
 
                 Button(action: onBuyNow) {
