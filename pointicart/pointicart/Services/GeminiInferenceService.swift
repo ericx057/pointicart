@@ -7,13 +7,13 @@ enum GeminiError: Error {
 }
 
 // MARK: - Gemini Multimodal Inference
-// Sends a cropped region around the user's fingertip to gemini-2.0-flash.
+// Sends a cropped region around the user's fingertip to gemini-2.5.
 // Returns the matched clothing item key.
 
 final class GeminiInferenceService: InferenceService {
 
     private let apiKey: String
-    private let model = "gemini-2.0-flash"
+    private let model = "gemini-2.5"
     private let baseURL = "https://generativelanguage.googleapis.com/v1beta/models"
 
     init(apiKey: String) {
