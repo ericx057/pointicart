@@ -56,22 +56,34 @@ final class AppState {
     // MARK: - Inference Callback
 
     func onDwellDetected(image: UIImage) async {
-        guard !isIdentifying else { return }
+        NSLog("[PTIC] onDwellDetected ENTER — isIdentifying=%d", isIdentifying ? 1 : 0)
+        guard !isIdentifying else {
+            NSLog("[PTIC] onDwellDetected SKIP — already identifying")
+            return
+        }
         isIdentifying = true
+        defer {
+            isIdentifying = false
+            NSLog("[PTIC] onDwellDetected EXIT — isIdentifying reset to false")
+        }
 
         let candidates = storeService.productKeys
+        NSLog("[PTIC] Store loaded=%d, candidates=%@",
+              storeService.isLoaded ? 1 : 0,
+              candidates.joined(separator: ", "))
         guard !candidates.isEmpty else {
-            isIdentifying = false
+            NSLog("[PTIC] onDwellDetected SKIP — no candidates (store not loaded)")
             return
         }
 
         let capturedPosition = fingertipPosition
 
-        print("[AppState] Sending image \(image.size) with candidates: \(candidates)")
+        NSLog("[PTIC] Sending image %.0fx%.0f to Gemini with %d candidates",
+              image.size.width, image.size.height, candidates.count)
 
         do {
             let result = try await inferenceService.identify(image: image, candidates: candidates)
-            print("[AppState] Inference result: \(String(describing: result?.productKey))")
+            NSLog("[PTIC] Inference result: %@", String(describing: result?.productKey))
             if let result, storeService.product(forKey: result.productKey) != nil {
                 identifiedProductKey = result.productKey
                 identifiedPosition = capturedPosition
@@ -80,13 +92,14 @@ final class AppState {
                 }
                 isProductRecognized = true
                 showProductCard = true
+                NSLog("[PTIC] Product recognized: %@ — showProductCard=true", result.productKey)
+            } else {
+                NSLog("[PTIC] No matching product in store for result")
             }
         } catch {
-            print("[AppState] Inference error: \(error)")
+            NSLog("[PTIC] Inference ERROR: %@", String(describing: error))
             isDwelling = false
         }
-
-        isIdentifying = false
     }
 
     // MARK: - Card Dismissal

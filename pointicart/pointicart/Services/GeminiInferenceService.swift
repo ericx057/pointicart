@@ -7,7 +7,7 @@ import UIKit
 final class GeminiInferenceService: InferenceService {
 
     private let apiKey: String
-    private let model = "gemini-1.5-flash"
+    private let model = "gemini-2.5-flash"
     private let baseURL = "https://generativelanguage.googleapis.com/v1beta/models"
 
     init(apiKey: String) {
@@ -15,10 +15,28 @@ final class GeminiInferenceService: InferenceService {
     }
 
     nonisolated func identify(image: UIImage, candidates: [String]) async throws -> IdentificationResult? {
-        guard !candidates.isEmpty else { return nil }
-        guard let imageData = image.jpegData(compressionQuality: 0.8) else { return nil }
+        NSLog("[PTIC][Gemini] identify called — candidates=%@", candidates.joined(separator: ", "))
+
+        guard !candidates.isEmpty else {
+            NSLog("[PTIC][Gemini] SKIP — empty candidates")
+            return nil
+        }
+
+        // Downscale to max 768px on longest side to reduce token usage
+        let resized = Self.resizeImage(image, maxDimension: 512)
+        NSLog("[PTIC][Gemini] Resized from %.0fx%.0f to %.0fx%.0f",
+              image.size.width, image.size.height,
+              resized.size.width, resized.size.height)
+
+        guard let imageData = resized.jpegData(compressionQuality: 0.4) else {
+            NSLog("[PTIC][Gemini] FAILED — jpegData returned nil")
+            return nil
+        }
 
         let base64Image = imageData.base64EncodedString()
+        NSLog("[PTIC][Gemini] Image encoded: %d bytes JPEG, %d chars base64",
+              imageData.count, base64Image.count)
+
         let candidateList = candidates.joined(separator: ", ")
 
         // Ask Gemini to identify the product AND return its bounding box.
@@ -29,6 +47,9 @@ final class GeminiInferenceService: InferenceService {
 
         If you find one of the listed products, respond with ONLY valid JSON (no markdown, no explanation):
         {"product": "Chair", "ymin": 200, "xmin": 100, "ymax": 800, "xmax": 900}
+
+        IMPORTANT: The "product" value must be the EXACT candidate name from the list above. \
+        Do NOT add adjectives, hyphens, or extra words. Use the candidate name exactly as listed.
 
         The box values (ymin, xmin, ymax, xmax) are integers 0-1000 representing the bounding box \
         of the detected product (0,0 = top-left of image, 1000,1000 = bottom-right).
@@ -51,14 +72,19 @@ final class GeminiInferenceService: InferenceService {
             ]],
             "generationConfig": [
                 "temperature": 0,
-                "maxOutputTokens": 100
+                "maxOutputTokens": 1024,
+                "thinkingConfig": [
+                    "thinkingBudget": 0
+                ]
             ]
         ]
 
         guard let url = URL(string: "\(baseURL)/\(model):generateContent?key=\(apiKey)") else {
+            NSLog("[PTIC][Gemini] FAILED — could not build URL")
             return nil
         }
         guard let bodyData = try? JSONSerialization.data(withJSONObject: requestBody) else {
+            NSLog("[PTIC][Gemini] FAILED — could not serialize request body")
             return nil
         }
 
@@ -68,20 +94,22 @@ final class GeminiInferenceService: InferenceService {
         request.httpBody = bodyData
         request.timeoutInterval = 20
 
+        NSLog("[PTIC][Gemini] Sending POST to %@", url.absoluteString.prefix(80).description)
+
         let (data, response) = try await URLSession.shared.data(for: request)
 
         let statusCode = (response as? HTTPURLResponse)?.statusCode ?? -1
-        print("[Gemini] HTTP \(statusCode)")
+        NSLog("[PTIC][Gemini] HTTP %d — response size=%d bytes", statusCode, data.count)
 
         guard statusCode == 200 else {
             if let body = String(data: data, encoding: .utf8) {
-                print("[Gemini] Error body: \(body)")
+                NSLog("[PTIC][Gemini] Error body: %@", body.prefix(500).description)
             }
             return nil
         }
 
         if let raw = String(data: data, encoding: .utf8) {
-            print("[Gemini] Raw response: \(raw)")
+            NSLog("[PTIC][Gemini] Raw response: %@", raw.prefix(500).description)
         }
 
         return parseResponse(data: data, validCandidates: candidates)
@@ -96,11 +124,11 @@ final class GeminiInferenceService: InferenceService {
             let parts = content["parts"] as? [[String: Any]],
             let text = parts.first?["text"] as? String
         else {
-            print("[Gemini] Failed to extract text from response")
+            NSLog("[PTIC][Gemini] FAILED — could not extract text from response envelope")
             return nil
         }
 
-        print("[Gemini] Model text: \(text)")
+        NSLog("[PTIC][Gemini] Model text: %@", text)
 
         // Strip markdown code fences if present (```json ... ``` or ``` ... ```)
         var cleaned = text.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -111,17 +139,32 @@ final class GeminiInferenceService: InferenceService {
                 .trimmingCharacters(in: .whitespacesAndNewlines)
         }
 
+        // Extract the first valid JSON object using brace matching
+        // (handles extra trailing braces or surrounding text)
+        if let start = cleaned.firstIndex(of: "{") {
+            var depth = 0
+            var end = start
+            for i in cleaned[start...].indices {
+                if cleaned[i] == "{" { depth += 1 }
+                if cleaned[i] == "}" { depth -= 1 }
+                if depth == 0 { end = i; break }
+            }
+            cleaned = String(cleaned[start...end])
+        }
+
+        NSLog("[PTIC][Gemini] Cleaned JSON: %@", cleaned)
+
         guard let jsonData = cleaned.data(using: .utf8),
               let parsed = try? JSONSerialization.jsonObject(with: jsonData) as? [String: Any]
         else {
-            print("[Gemini] JSON parse failed for: \(cleaned)")
+            NSLog("[PTIC][Gemini] FAILED — JSON parse failed for: %@", cleaned)
             return nil
         }
 
         guard let productName = parsed["product"] as? String,
               productName.lowercased() != "none"
         else {
-            print("[Gemini] Product is none or missing")
+            NSLog("[PTIC][Gemini] Product is 'none' or missing")
             return nil
         }
 
@@ -129,13 +172,14 @@ final class GeminiInferenceService: InferenceService {
         guard let matchedKey = validCandidates.first(where: {
             $0.lowercased() == productName.lowercased()
         }) else {
-            print("[Gemini] No match for '\(productName)' in candidates: \(validCandidates)")
+            NSLog("[PTIC][Gemini] No match for '%@' in candidates: %@",
+                  productName, validCandidates.joined(separator: ", "))
             return nil
         }
 
-        print("[Gemini] Matched key: \(matchedKey)")
+        NSLog("[PTIC][Gemini] Matched key: %@", matchedKey)
 
-        // Parse bounding box if present (0-1000 → 0-1 normalized)
+        // Parse bounding box if present (0-1000 -> 0-1 normalized)
         // Gemini may return ints or doubles
         func toDouble(_ v: Any?) -> Double? {
             if let d = v as? Double { return d }
@@ -154,11 +198,31 @@ final class GeminiInferenceService: InferenceService {
                 width: (xmax - xmin) / 1000.0,
                 height: (ymax - ymin) / 1000.0
             )
-            print("[Gemini] Bounding box: \(box!)")
+            NSLog("[PTIC][Gemini] Bounding box: %@", NSCoder.string(for: box!))
         } else {
-            print("[Gemini] No bounding box in response")
+            NSLog("[PTIC][Gemini] No bounding box in response")
         }
 
         return IdentificationResult(productKey: matchedKey, normalizedBox: box)
+    }
+
+    // MARK: - Image Resizing
+
+    nonisolated private static func resizeImage(_ image: UIImage, maxDimension: CGFloat) -> UIImage {
+        let size = image.size
+        guard max(size.width, size.height) > maxDimension else { return image }
+
+        let scale: CGFloat
+        if size.width > size.height {
+            scale = maxDimension / size.width
+        } else {
+            scale = maxDimension / size.height
+        }
+
+        let newSize = CGSize(width: size.width * scale, height: size.height * scale)
+        let renderer = UIGraphicsImageRenderer(size: newSize)
+        return renderer.image { _ in
+            image.draw(in: CGRect(origin: .zero, size: newSize))
+        }
     }
 }

@@ -3,6 +3,8 @@ import SwiftUI
 struct CartOverlayView: View {
     let cartManager: CartManager
     let storeName: String
+    let suggestedProduct: Product?
+    let onAddSuggested: (Product) -> Void
     let onPaymentComplete: () -> Void
     @State private var showCheckout = false
 
@@ -35,12 +37,15 @@ struct CartOverlayView: View {
                 }
                 .padding(.horizontal, 20)
                 .padding(.vertical, 14)
+                .padding(.bottom, 20)
                 .background(.ultraThinMaterial)
             }
             .sheet(isPresented: $showCheckout) {
                 CheckoutSheet(
                     cartManager: cartManager,
                     storeName: storeName,
+                    suggestedProduct: suggestedProduct,
+                    onAddSuggested: onAddSuggested,
                     onPaymentComplete: onPaymentComplete
                 )
             }
@@ -53,9 +58,12 @@ struct CartOverlayView: View {
 struct CheckoutSheet: View {
     let cartManager: CartManager
     let storeName: String
+    let suggestedProduct: Product?
+    let onAddSuggested: (Product) -> Void
     let onPaymentComplete: () -> Void
     @Environment(\.dismiss) private var dismiss
     @State private var didPay = false
+    @State private var addedSuggestion = false
 
     var body: some View {
         NavigationStack {
@@ -87,6 +95,40 @@ struct CheckoutSheet: View {
                         }
                     }
 
+                    // Recommended product
+                    if let suggested = suggestedProduct, !addedSuggestion {
+                        Section("Recommended") {
+                            HStack {
+                                Image(systemName: suggested.imageSystemName)
+                                    .font(.title3)
+                                    .foregroundStyle(.green)
+                                    .frame(width: 30)
+
+                                VStack(alignment: .leading) {
+                                    Text(suggested.name)
+                                        .font(.subheadline.bold())
+                                    Text("Often paired with your items")
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                }
+
+                                Spacer()
+
+                                VStack(alignment: .trailing, spacing: 4) {
+                                    Text(suggested.formattedPrice)
+                                        .font(.subheadline.bold())
+                                    Button("Add") {
+                                        onAddSuggested(suggested)
+                                        withAnimation { addedSuggestion = true }
+                                    }
+                                    .font(.caption.bold())
+                                    .buttonStyle(.borderedProminent)
+                                    .tint(.green)
+                                }
+                            }
+                        }
+                    }
+
                     Section {
                         HStack {
                             Text("Total")
@@ -113,7 +155,7 @@ struct CheckoutSheet: View {
                         withAnimation { didPay = true }
                         Task {
                             try? await Task.sleep(for: .seconds(2))
-                            onPaymentComplete()   // cancels task + notifications via AppState
+                            onPaymentComplete()
                             cartManager.clear()
                             dismiss()
                         }

@@ -16,6 +16,7 @@ struct ARCameraView: UIViewRepresentable {
         sceneView.session.run(config)
 
         context.coordinator.sceneView = sceneView
+        NSLog("[PTIC] ARCameraView makeUIView complete, sceneView assigned")
         return sceneView
     }
 
@@ -35,7 +36,7 @@ struct ARCameraView: UIViewRepresentable {
         private var lastPosition: CGPoint?
         private var dwellStart: Date?
         private var hasFiredDwell = false
-        private let processEveryN = 4
+        private let processEveryN = 5
 
         init(appState: AppState) {
             self.appState = appState
@@ -54,7 +55,7 @@ struct ARCameraView: UIViewRepresentable {
             guard frameCount % processEveryN == 0, !isProcessing else { return }
             isProcessing = true
 
-            Task { [weak self] in
+            Task { @MainActor [weak self] in
                 guard let self else { return }
                 let normalizedPoint = await Self.detectIndexTip(in: pixelBuffer)
                 self.processTipResult(normalizedPoint, pixelBuffer: pixelBuffer)
@@ -83,10 +84,15 @@ struct ARCameraView: UIViewRepresentable {
                 let dist = hypot(screenPoint.x - last.x, screenPoint.y - last.y)
                 if dist < 30 {
                     if let start = dwellStart {
-                        if Date().timeIntervalSince(start) >= 0.5 && !hasFiredDwell {
+                        let elapsed = Date().timeIntervalSince(start)
+                        if elapsed >= 0.3 && !hasFiredDwell {
+                            NSLog("[PTIC] DWELL FIRED — elapsed=%.2fs, storeLoaded=%d, candidates=%d",
+                                  elapsed,
+                                  appState.storeService.isLoaded ? 1 : 0,
+                                  appState.storeService.productKeys.count)
                             appState.isDwelling = true
                             hasFiredDwell = true
-                            fireDwellIdentification(pixelBuffer: pixelBuffer)
+                            fireDwellIdentification()
                         }
                     } else {
                         dwellStart = Date()
@@ -101,29 +107,42 @@ struct ARCameraView: UIViewRepresentable {
             isProcessing = false
         }
 
-        private func fireDwellIdentification(pixelBuffer: CVPixelBuffer) {
-            // ARKit recycles pixel buffers every frame. CIImage is lazy — it just
-            // holds a reference to the buffer, not a copy. If we defer rendering
-            // to an async Task the buffer is gone and createCGImage returns nil.
-            //
-            // Fix: lock the buffer, force-render to CGImage (copies the bits)
-            // synchronously, then hand the UIImage to the async Task.
-            print("[AR] fireDwellIdentification called")
-            CVPixelBufferLockBaseAddress(pixelBuffer, .readOnly)
-            let ciImage = CIImage(cvPixelBuffer: pixelBuffer).oriented(.right)
-            let ctx = CIContext()
-            let cgImage = ctx.createCGImage(ciImage, from: ciImage.extent)
-            CVPixelBufferUnlockBaseAddress(pixelBuffer, .readOnly)
+        private func fireDwellIdentification() {
+            NSLog("[PTIC] fireDwellIdentification — sceneView=%@, session=%@",
+                  String(describing: sceneView),
+                  String(describing: sceneView?.session))
 
-            guard let cgImage else {
-                print("[AR] cgImage snapshot failed")
+            guard let currentBuffer = sceneView?.session.currentFrame?.capturedImage else {
+                NSLog("[PTIC] FAILED — no current frame from ARSession")
                 return
             }
-            let snapshot = UIImage(cgImage: cgImage)
-            print("[AR] snapshot size: \(snapshot.size)")
 
-            Task {
-                await appState.onDwellDetected(image: snapshot)
+            NSLog("[PTIC] Got fresh pixel buffer: %dx%d",
+                  CVPixelBufferGetWidth(currentBuffer),
+                  CVPixelBufferGetHeight(currentBuffer))
+
+            let lockStatus = CVPixelBufferLockBaseAddress(currentBuffer, .readOnly)
+            NSLog("[PTIC] Lock status: %d", lockStatus)
+
+            let ciImage = CIImage(cvPixelBuffer: currentBuffer).oriented(.right)
+            NSLog("[PTIC] CIImage extent: %@", NSCoder.string(for: ciImage.extent))
+
+            let ctx = CIContext()
+            let cgImage = ctx.createCGImage(ciImage, from: ciImage.extent)
+            CVPixelBufferUnlockBaseAddress(currentBuffer, .readOnly)
+
+            guard let cgImage else {
+                NSLog("[PTIC] FAILED — createCGImage returned nil")
+                return
+            }
+
+            let snapshot = UIImage(cgImage: cgImage)
+            NSLog("[PTIC] Snapshot OK: %.0fx%.0f", snapshot.size.width, snapshot.size.height)
+
+            Task { @MainActor in
+                NSLog("[PTIC] Calling onDwellDetected...")
+                await self.appState.onDwellDetected(image: snapshot)
+                NSLog("[PTIC] onDwellDetected returned")
             }
         }
 
