@@ -87,7 +87,25 @@ struct ContentView: View {
                     onPaymentComplete: { appState.onSessionPaymentComplete() }
                 )
 
-                // Layer 5: Store loading prompt (if no store loaded)
+                // Layer 5: Recognition error message
+                if appState.showRecognitionError {
+                    VStack {
+                        Text("Object not recognized")
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 20)
+                            .padding(.vertical, 12)
+                            .background(.ultraThinMaterial, in: Capsule())
+                            .overlay(Capsule().stroke(.white.opacity(0.2), lineWidth: 0.5))
+                            .shadow(color: .black.opacity(0.3), radius: 10, y: 4)
+                        Spacer()
+                    }
+                    .padding(.top, 60)
+                    .transition(.move(edge: .top).combined(with: .opacity))
+                    .animation(.spring(duration: 0.35), value: appState.showRecognitionError)
+                }
+
+                // Layer 6: Store loading prompt (if no store loaded)
                 if !appState.storeService.isLoaded {
                     StoreLoadingPrompt(appState: appState)
                 }

@@ -31,6 +31,10 @@ final class AppState {
     // UX: Cart confirm flash (feature 7)
     var showCartConfirmFlash: Bool = false
 
+    // UX: Recognition failure after retries
+    var showRecognitionError: Bool = false
+    private let maxRetries = 3
+
     // UX: Position cache for instant re-identification (feature 1)
     private var positionCache: [String: PositionCacheEntry] = [:]
     private let positionCacheTTL: TimeInterval = 30.0
@@ -210,8 +214,9 @@ final class AppState {
             return
         }
 
-        // No cache hit — call Gemini
+        // No cache hit — call Gemini with retries
         isIdentifying = true
+        showRecognitionError = false
         defer {
             isIdentifying = false
             NSLog("[PTIC] onDwellDetected EXIT — isIdentifying reset to false")
@@ -220,40 +225,56 @@ final class AppState {
         NSLog("[PTIC] Sending image %.0fx%.0f to Gemini with %d candidates",
               image.size.width, image.size.height, candidates.count)
 
-        do {
-            let result = try await inferenceService.identify(image: image, candidates: candidates)
-            NSLog("[PTIC] Inference result: %@", String(describing: result?.productKey))
-            if let result, storeService.product(forKey: result.productKey) != nil {
-                let screenBox = result.normalizedBox.map {
-                    Self.screenRect(fromNormalized: $0, imageSize: image.size)
+        var lastError: Error?
+        for attempt in 1...maxRetries {
+            do {
+                let result = try await inferenceService.identify(image: image, candidates: candidates)
+                NSLog("[PTIC] Inference result (attempt %d): %@", attempt, String(describing: result?.productKey))
+                if let result, storeService.product(forKey: result.productKey) != nil {
+                    // Image is cropped around the fingertip so the bounding box from Gemini
+                    // is relative to the crop, not the full screen. Use fingertip position
+                    // for card placement instead.
+                    identifiedProductKey = result.productKey
+                    identifiedPosition = capturedPosition
+                    identifiedBoundingBox = nil
+                    isProductRecognized = true
+                    showProductCard = true
+                    NSLog("[PTIC] Product recognized: %@ — showProductCard=true", result.productKey)
+
+                    // Cache this identification (feature 1)
+                    cacheIdentification(
+                        productKey: result.productKey,
+                        position: capturedPosition,
+                        boundingBox: nil
+                    )
+
+                    // Feature 5: Start auto-dismiss timer
+                    startAutoDismissTimer()
+
+                    // Record browsing behavior for recommendation engine
+                    vectorStore.recordDwell()
+                    vectorStore.recordProductView(productKey: result.productKey)
+                    return
+                } else {
+                    NSLog("[PTIC] No matching product in store for result (attempt %d)", attempt)
                 }
-
-                identifiedProductKey = result.productKey
-                identifiedPosition = capturedPosition
-                identifiedBoundingBox = screenBox
-                isProductRecognized = true
-                showProductCard = true
-                NSLog("[PTIC] Product recognized: %@ — showProductCard=true", result.productKey)
-
-                // Cache this identification (feature 1)
-                cacheIdentification(
-                    productKey: result.productKey,
-                    position: capturedPosition,
-                    boundingBox: screenBox
-                )
-
-                // Feature 5: Start auto-dismiss timer
-                startAutoDismissTimer()
-
-                // Record browsing behavior for recommendation engine
-                vectorStore.recordDwell()
-                vectorStore.recordProductView(productKey: result.productKey)
-            } else {
-                NSLog("[PTIC] No matching product in store for result")
+            } catch {
+                lastError = error
+                NSLog("[PTIC] Inference ERROR (attempt %d/%d): %@", attempt, maxRetries, String(describing: error))
+                if attempt < maxRetries {
+                    try? await Task.sleep(for: .seconds(1))
+                }
             }
-        } catch {
-            NSLog("[PTIC] Inference ERROR: %@", String(describing: error))
-            isDwelling = false
+        }
+
+        // All retries exhausted — show error
+        NSLog("[PTIC] All %d attempts failed — showing recognition error. Last error: %@",
+              maxRetries, String(describing: lastError))
+        isDwelling = false
+        showRecognitionError = true
+        Task { @MainActor in
+            try? await Task.sleep(for: .seconds(3))
+            showRecognitionError = false
         }
     }
 

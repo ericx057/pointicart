@@ -1,13 +1,13 @@
 import UIKit
 
 // MARK: - Gemini Multimodal Inference
-// Sends the full portrait-oriented camera frame to gemini-2.5-flash.
-// Returns the matched clothing item key + a bounding box (0-1 normalized, portrait image space).
+// Sends a cropped region around the user's fingertip to gemini-2.0-flash.
+// Returns the matched clothing item key.
 
 final class GeminiInferenceService: InferenceService {
 
     private let apiKey: String
-    private let model = "gemini-2.5-flash"
+    private let model = "gemini-2.0-flash"
     private let baseURL = "https://generativelanguage.googleapis.com/v1beta/models"
 
     init(apiKey: String) {
@@ -39,23 +39,20 @@ final class GeminiInferenceService: InferenceService {
 
         let candidateList = candidates.joined(separator: ", ")
 
-        // Ask Gemini to identify the product AND return its bounding box.
-        // Box format: values 0-1000 (Gemini standard), origin top-left.
+        // Ask Gemini to identify the product from the cropped fingertip region.
         let prompt = """
         You are a clothing identifier for a retail clothing store. A customer is pointing at an article of clothing. \
-        Look at the center of this image and identify which ONE of these clothing items is most prominent: [\(candidateList)].
+        This image is cropped around where the customer is pointing. Identify which ONE of these clothing items \
+        is most prominent in this image: [\(candidateList)].
 
         If you find one of the listed clothing items, respond with ONLY valid JSON (no markdown, no explanation):
-        {"product": "Jacket", "ymin": 200, "xmin": 100, "ymax": 800, "xmax": 900}
+        {"product": "Jacket"}
 
         IMPORTANT RULES:
         - The "product" value must EXACTLY match one of the candidate names listed above.
         - Do NOT add adjectives, hyphens, or extra words. Use the candidate name verbatim.
-        - Focus on the article of clothing near the center of the image, not background objects or people.
+        - Focus on the article of clothing in the image, not background objects or people.
         - Identify the clothing item itself (on a rack, mannequin, shelf, or being held), not what someone is wearing.
-
-        The box values (ymin, xmin, ymax, xmax) are integers 0-1000 representing the bounding box \
-        of the detected clothing item (0,0 = top-left of image, 1000,1000 = bottom-right).
 
         If NONE of the listed clothing items are clearly visible, respond with ONLY:
         {"product": "none"}
@@ -75,7 +72,7 @@ final class GeminiInferenceService: InferenceService {
             ]],
             "generationConfig": [
                 "temperature": 0,
-                "maxOutputTokens": 1024
+                "maxOutputTokens": 128
             ]
         ]
 

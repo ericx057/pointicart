@@ -53,6 +53,10 @@ struct ARCameraView: UIViewRepresentable {
         private func handleFrame(_ pixelBuffer: CVPixelBuffer) {
             frameCount += 1
             guard frameCount % processEveryN == 0, !isProcessing else { return }
+
+            // Don't process hand tracking until a store is loaded (NFC/demo)
+            guard appState.storeService.isLoaded else { return }
+
             isProcessing = true
 
             Task { @MainActor [weak self] in
@@ -125,10 +129,37 @@ struct ARCameraView: UIViewRepresentable {
             NSLog("[PTIC] Lock status: %d", lockStatus)
 
             let ciImage = CIImage(cvPixelBuffer: currentBuffer).oriented(.right)
-            NSLog("[PTIC] CIImage extent: %@", NSCoder.string(for: ciImage.extent))
+            let extent = ciImage.extent
+            NSLog("[PTIC] CIImage extent: %@", NSCoder.string(for: extent))
+
+            // Crop around the fingertip so Gemini focuses on what the user is pointing at.
+            // Map screen position to image-pixel position, then take a region around it.
+            let cropRect: CGRect
+            if let tip = lastPosition, let bounds = sceneView?.bounds, bounds.width > 0, bounds.height > 0 {
+                // Screen-point → normalized (0-1)
+                let nx = tip.x / bounds.width
+                let ny = tip.y / bounds.height
+
+                // Normalized → image-pixel (portrait oriented image)
+                let imgX = nx * extent.width
+                let imgY = ny * extent.height
+
+                // Crop a square region around the finger (40% of the shorter dimension)
+                let cropSize = min(extent.width, extent.height) * 0.5
+                let half = cropSize / 2.0
+                let rawRect = CGRect(x: imgX - half, y: imgY - half, width: cropSize, height: cropSize)
+
+                // Clamp to image bounds
+                cropRect = rawRect.intersection(extent)
+                NSLog("[PTIC] Cropping around fingertip: screen=(%.0f,%.0f) img=(%.0f,%.0f) crop=%@",
+                      tip.x, tip.y, imgX, imgY, NSCoder.string(for: cropRect))
+            } else {
+                cropRect = extent
+                NSLog("[PTIC] No fingertip — using full image")
+            }
 
             let ctx = CIContext()
-            let cgImage = ctx.createCGImage(ciImage, from: ciImage.extent)
+            let cgImage = ctx.createCGImage(ciImage, from: cropRect)
             CVPixelBufferUnlockBaseAddress(currentBuffer, .readOnly)
 
             guard let cgImage else {
