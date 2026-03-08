@@ -89,7 +89,7 @@ struct ARCameraView: UIViewRepresentable {
                 if dist < 30 {
                     if let start = dwellStart {
                         let elapsed = Date().timeIntervalSince(start)
-                        if elapsed >= 0.15 && !hasFiredDwell {
+                        if elapsed >= 0.8 && !hasFiredDwell {
                             NSLog("[PTIC] DWELL FIRED — elapsed=%.2fs, storeLoaded=%d, candidates=%d",
                                   elapsed,
                                   appState.storeService.isLoaded ? 1 : 0,

@@ -43,6 +43,10 @@ final class AppState {
     private var autoDismissTask: Task<Void, Never>?
     private let autoDismissDelay: TimeInterval = 4.0
 
+    // UX: Cooldown between Gemini API calls
+    private var lastInferenceTime: Date = .distantPast
+    private let inferenceCooldown: TimeInterval = 5.0
+
     // Abandoned cart timer
     private var abandonedCartTask: Task<Void, Never>?
 
@@ -165,6 +169,13 @@ final class AppState {
             return
         }
 
+        // Cooldown: don't call Gemini more than once per inferenceCooldown seconds
+        let timeSinceLast = Date().timeIntervalSince(lastInferenceTime)
+        guard timeSinceLast >= inferenceCooldown else {
+            NSLog("[PTIC] onDwellDetected SKIP — cooldown (%.1fs since last call)", timeSinceLast)
+            return
+        }
+
         let candidates = storeService.productKeys
         guard !candidates.isEmpty else {
             NSLog("[PTIC] onDwellDetected SKIP — no candidates (store not loaded)")
@@ -216,6 +227,7 @@ final class AppState {
 
         // No cache hit — call Gemini with retries
         isIdentifying = true
+        lastInferenceTime = Date()
         showRecognitionError = false
         defer {
             isIdentifying = false
@@ -262,7 +274,9 @@ final class AppState {
                 lastError = error
                 NSLog("[PTIC] Inference ERROR (attempt %d/%d): %@", attempt, maxRetries, String(describing: error))
                 if attempt < maxRetries {
-                    try? await Task.sleep(for: .seconds(1))
+                    let backoff = Double(1 << (attempt - 1)) // 1s, 2s, 4s...
+                    NSLog("[PTIC] Backing off %.0fs before retry", backoff)
+                    try? await Task.sleep(for: .seconds(backoff))
                 }
             }
         }
