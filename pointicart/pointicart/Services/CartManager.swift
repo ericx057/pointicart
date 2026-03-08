@@ -30,18 +30,19 @@ final class CartManager {
         items.first?.product.name
     }
 
-    func add(_ product: Product) {
+    func add(_ product: Product, selectedSize: ProductSize? = nil) {
         UIImpactFeedbackGenerator(style: .medium).impactOccurred()
 
         if let index = items.firstIndex(where: { $0.product.id == product.id }) {
             var updated = items
             updated[index] = CartItem(
                 product: items[index].product,
-                quantity: items[index].quantity + 1
+                quantity: items[index].quantity + 1,
+                selectedSize: items[index].selectedSize
             )
             items = updated
         } else {
-            items = items + [CartItem(product: product)]
+            items = items + [CartItem(product: product, selectedSize: selectedSize)]
         }
         lastInteractionAt = Date()
     }

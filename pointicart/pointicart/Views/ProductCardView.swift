@@ -8,39 +8,50 @@ struct ProductCardView: View {
     var body: some View {
         VStack(spacing: 12) {
             Image(systemName: product.imageSystemName)
-                .font(.system(size: 40))
-                .foregroundStyle(.blue)
-                .frame(height: 50)
+                .font(.system(size: 36, weight: .light))
+                .foregroundStyle(.white.opacity(0.8))
+                .frame(height: 44)
 
             Text(product.name)
                 .font(.headline)
-                .foregroundStyle(.primary)
+                .foregroundStyle(.white)
 
             Text(product.formattedPrice)
-                .font(.title2.bold())
-                .foregroundStyle(.primary)
+                .font(.title3.weight(.semibold))
+                .foregroundStyle(.white.opacity(0.85))
 
-            Button(action: onAddToCart) {
-                Label("Add to Cart", systemImage: "cart.badge.plus")
-                    .font(.subheadline.bold())
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 10)
-            }
-            .buttonStyle(.borderedProminent)
-            .tint(.blue)
+            HStack(spacing: 10) {
+                Button(action: onAddToCart) {
+                    Text("Add to Cart")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.white)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 10)
+                        .background(.white.opacity(0.15), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                .stroke(.white.opacity(0.2), lineWidth: 0.5)
+                        )
+                }
 
-            Button(action: onBuyNow) {
-                Label("Buy Now", systemImage: "bolt.fill")
-                    .font(.subheadline.bold())
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 10)
+                Button(action: onBuyNow) {
+                    Text("Buy Now")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.white)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 10)
+                        .background(.white.opacity(0.25), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                .stroke(.white.opacity(0.3), lineWidth: 0.5)
+                        )
+                }
             }
-            .buttonStyle(.borderedProminent)
-            .tint(.green)
         }
         .padding(20)
         .frame(width: 240)
-        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 20))
-        .shadow(color: .black.opacity(0.3), radius: 20, y: 10)
+        .background { GlassBackground(cornerRadius: 24) }
+        .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
+        .shadow(color: .black.opacity(0.25), radius: 20, y: 8)
     }
 }

@@ -7,6 +7,14 @@ final class AppState {
     let cartManager = CartManager()
     let inferenceService: any InferenceService = GeminiInferenceService(apiKey: Secrets.geminiAPIKey)
 
+    // Recommendation engine services
+    let vectorStore = InteractionVectorStore()
+    let sizingService = SizingService()
+
+    // Session / demographic state
+    private(set) var demographic: Demographic?
+    private(set) var nfcTagData: NFCTagData?
+
     // Hand tracking state
     var fingertipPosition: CGPoint?
     var isDwelling: Bool = false
@@ -33,6 +41,78 @@ final class AppState {
         return storeService.upsell(for: product)
     }
 
+    // MARK: - Store Entry (Simulated NFC)
+
+    /// Called when the user enters a store (NFC tap or demo button).
+    func loadStore(id: Int, demographic: Demographic) {
+        let tag = NFCTagData(storeId: id, demographic: demographic)
+        self.nfcTagData = tag
+        self.demographic = demographic
+
+        storeService.load(id: id)
+        vectorStore.beginSession(demographic: demographic)
+
+        let location = Self.locationContext(forStoreId: id)
+        sizingService.setLocation(location)
+    }
+
+    private static func locationContext(forStoreId id: Int) -> LocationContext {
+        switch id {
+        case 42:
+            return LocationContext(
+                storeId: 42, mallId: nil,
+                city: "Toronto", province: "ON", country: "CA"
+            )
+        default:
+            return LocationContext(
+                storeId: id, mallId: nil,
+                city: "Toronto", province: "ON", country: "CA"
+            )
+        }
+    }
+
+    // MARK: - Cart Add (with interaction tracking + sizing)
+
+    /// Add a product to cart with automatic size defaulting and interaction recording.
+    func addToCart(_ product: Product) {
+        let defaultSize: ProductSize?
+        if let demo = demographic, product.category != .unsized {
+            defaultSize = sizingService.defaultSize(for: product.category, demographic: demo)
+        } else {
+            defaultSize = nil
+        }
+
+        cartManager.add(product, selectedSize: defaultSize)
+        vectorStore.recordCartAdd()
+        startAbandonedCartTimer()
+    }
+
+    // MARK: - Recommendation Engine Output
+
+    /// The suggested products to show, filtered by recommendation intensity.
+    var activeSuggestedProducts: [Product] {
+        let intensity = RecommendationEngine.computeIntensity(
+            timeInStore: vectorStore.timeInStoreSeconds,
+            cartItemCount: cartManager.itemCount,
+            addFrequency: vectorStore.addFrequency,
+            dwellCount: vectorStore.dwellCount
+        )
+
+        let maxCount = RecommendationEngine.maxSuggestedProducts(
+            forIntensity: intensity,
+            totalAvailable: storeService.suggestedProducts.count
+        )
+
+        NSLog("[PTIC][Reco] intensity=%.3f, maxProducts=%d (time=%.0fs, cart=%d, freq=%.2f, dwells=%d)",
+              intensity, maxCount,
+              vectorStore.timeInStoreSeconds,
+              cartManager.itemCount,
+              vectorStore.addFrequency,
+              vectorStore.dwellCount)
+
+        return Array(storeService.suggestedProducts.prefix(maxCount))
+    }
+
     // MARK: - URL Routing
 
     func handleURL(_ url: URL) {
@@ -42,7 +122,7 @@ final class AppState {
         if components.path.contains("store"),
            let idString = components.queryItems?.first(where: { $0.name == "id" })?.value,
            let storeId = Int(idString) {
-            storeService.load(id: storeId)
+            loadStore(id: storeId, demographic: .adult)
             return
         }
 
@@ -93,6 +173,10 @@ final class AppState {
                 isProductRecognized = true
                 showProductCard = true
                 NSLog("[PTIC] Product recognized: %@ — showProductCard=true", result.productKey)
+
+                // Record browsing behavior for recommendation engine
+                vectorStore.recordDwell()
+                vectorStore.recordProductView(productKey: result.productKey)
             } else {
                 NSLog("[PTIC] No matching product in store for result")
             }
@@ -164,6 +248,12 @@ final class AppState {
     func cancelAbandonedCartTimer() {
         abandonedCartTask?.cancel()
         NotificationService.cancelAbandonedCartReminders()
+    }
+
+    /// Called when payment completes — ends the session and persists the interaction vector.
+    func onSessionPaymentComplete() {
+        cancelAbandonedCartTimer()
+        vectorStore.endSession(cartItemCount: cartManager.itemCount)
     }
 
     // MARK: - Cart Restoration (Deep Link)

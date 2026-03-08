@@ -23,13 +23,13 @@ struct ContentView: View {
                 // Layer 2.5: Loading indicator while identifying
                 if appState.isIdentifying && !appState.showProductCard {
                     if let position = appState.fingertipPosition {
-                        Text("Identifying product...")
-                            .font(.caption.bold())
+                        Text("Identifying...")
+                            .font(.caption2.weight(.medium))
                             .foregroundStyle(.white)
                             .padding(.horizontal, 10)
-                            .padding(.vertical, 6)
-                            .background(.black.opacity(0.5), in: Capsule())
-                            .position(x: position.x, y: position.y + 50)
+                            .padding(.vertical, 5)
+                            .background(.ultraThinMaterial, in: Capsule())
+                            .position(x: position.x, y: position.y + 44)
                             .transition(.opacity)
                     }
                 }
@@ -38,17 +38,15 @@ struct ContentView: View {
                 if appState.showProductCard, let product = appState.identifiedProduct {
                     ObjectHighlightOverlay(
                         product: product,
-                        upsell: appState.upsellProduct,
                         boundingBox: appState.identifiedBoundingBox,
                         fallbackPosition: appState.identifiedPosition,
                         screenSize: geo.size,
                         onAddToCart: {
-                            appState.cartManager.add(product)
-                            appState.startAbandonedCartTimer()
+                            appState.addToCart(product)
                             withAnimation(.spring(duration: 0.3)) { appState.dismissProductCard() }
                         },
                         onBuyNow: {
-                            appState.cartManager.add(product)
+                            appState.addToCart(product)
                             appState.showDirectCheckout = true
                         },
                         onDismiss: {
@@ -57,7 +55,7 @@ struct ContentView: View {
                     )
                     .frame(width: geo.size.width, height: geo.size.height)
                     .transition(.asymmetric(
-                        insertion: .scale(scale: 0.9).combined(with: .opacity),
+                        insertion: .scale(scale: 0.95).combined(with: .opacity),
                         removal: .opacity
                     ))
                 }
@@ -67,10 +65,11 @@ struct ContentView: View {
                     cartManager: appState.cartManager,
                     storeName: appState.storeService.storeName,
                     suggestedProduct: appState.upsellProduct,
+                    suggestedProducts: appState.activeSuggestedProducts,
                     onAddSuggested: { product in
-                        appState.cartManager.add(product)
+                        appState.addToCart(product)
                     },
-                    onPaymentComplete: { appState.cancelAbandonedCartTimer() }
+                    onPaymentComplete: { appState.onSessionPaymentComplete() }
                 )
 
                 // Layer 5: Store loading prompt (if no store loaded)
@@ -80,17 +79,18 @@ struct ContentView: View {
             }
         }
         .ignoresSafeArea()
-        .animation(.spring(duration: 0.4), value: appState.showProductCard)
+        .animation(.spring(duration: 0.35), value: appState.showProductCard)
         .sheet(isPresented: $appState.showDirectCheckout) {
             CheckoutSheet(
                 cartManager: appState.cartManager,
                 storeName: appState.storeService.storeName,
                 suggestedProduct: appState.upsellProduct,
+                suggestedProducts: appState.activeSuggestedProducts,
                 onAddSuggested: { product in
-                    appState.cartManager.add(product)
+                    appState.addToCart(product)
                 },
                 onPaymentComplete: {
-                    appState.cancelAbandonedCartTimer()
+                    appState.onSessionPaymentComplete()
                     appState.dismissProductCard()
                 }
             )
@@ -106,60 +106,48 @@ struct ScanningIndicator: View {
     let isProductRecognized: Bool
     @State private var rotation: Double = 0
 
-    private var ringColor: Color {
-        if isProductRecognized { return .green }
-        if isDwelling || isIdentifying { return .yellow }
-        return .white
-    }
-
     var body: some View {
         ZStack {
             // Outer ring
             Circle()
-                .stroke(ringColor, lineWidth: 2)
-                .frame(width: 60, height: 60)
-                .opacity(0.8)
+                .stroke(.white.opacity(0.3), lineWidth: 1)
+                .frame(width: 52, height: 52)
 
-            // Scanning arc (amber while dwelling/identifying)
+            // Scanning arc
             if (isDwelling || isIdentifying) && !isProductRecognized {
                 Circle()
-                    .stroke(Color.yellow, lineWidth: 3)
-                    .frame(width: 60, height: 60)
+                    .trim(from: 0, to: 0.25)
+                    .stroke(.white.opacity(0.8),
+                            style: StrokeStyle(lineWidth: 2, lineCap: .round))
+                    .frame(width: 52, height: 52)
                     .rotationEffect(.degrees(rotation))
                     .onAppear {
-                        withAnimation(.linear(duration: 1).repeatForever(autoreverses: false)) {
+                        withAnimation(.linear(duration: 0.8).repeatForever(autoreverses: false)) {
                             rotation = 360
                         }
                     }
             }
 
-            // Recognized arc (green pulse when product confirmed)
+            // Recognized state
             if isProductRecognized {
                 Circle()
-                    .stroke(Color.green, lineWidth: 3)
-                    .frame(width: 60, height: 60)
-                    .rotationEffect(.degrees(rotation))
-                    .onAppear {
-                        withAnimation(.linear(duration: 0.6).repeatForever(autoreverses: false)) {
-                            rotation = 360
-                        }
-                    }
+                    .stroke(.white.opacity(0.7), lineWidth: 2)
+                    .frame(width: 52, height: 52)
             }
 
             // Center dot
             Circle()
-                .fill(isProductRecognized ? Color.green : (isDwelling || isIdentifying ? Color.yellow : Color.white))
-                .frame(width: 8, height: 8)
+                .fill(.white.opacity(0.9))
+                .frame(width: 5, height: 5)
 
-            // Crosshair lines
+            // Crosshairs
             Group {
-                Rectangle().frame(width: 1, height: 20).offset(y: -20)
-                Rectangle().frame(width: 1, height: 20).offset(y: 20)
-                Rectangle().frame(width: 20, height: 1).offset(x: -20)
-                Rectangle().frame(width: 20, height: 1).offset(x: 20)
+                Rectangle().frame(width: 0.5, height: 10).offset(y: -18)
+                Rectangle().frame(width: 0.5, height: 10).offset(y: 18)
+                Rectangle().frame(width: 10, height: 0.5).offset(x: -18)
+                Rectangle().frame(width: 10, height: 0.5).offset(x: 18)
             }
-            .foregroundStyle(ringColor)
-            .opacity(0.6)
+            .foregroundStyle(.white.opacity(0.35))
         }
     }
 }
@@ -173,11 +161,8 @@ private struct CardSizePreference: PreferenceKey {
 
 // MARK: - Object Highlight Overlay
 
-/// Draws animated corner brackets around the detected object and shows
-/// a floating product info card adjacent to the bounding box.
 struct ObjectHighlightOverlay: View {
     let product: Product
-    let upsell: Product?
     let boundingBox: CGRect?
     let fallbackPosition: CGPoint?
     let screenSize: CGSize
@@ -185,27 +170,21 @@ struct ObjectHighlightOverlay: View {
     let onBuyNow: () -> Void
     let onDismiss: () -> Void
 
-    @State private var bracketOpacity: Double = 0
-    @State private var bracketScale: CGFloat = 0.85
-    @State private var glowOpacity: Double = 0
-    @State private var measuredCardHeight: CGFloat = 200
+    @State private var appear = false
+    @State private var measuredCardHeight: CGFloat = 180
 
-    private var cardWidth: CGFloat { isLandscape ? 300 : min(screenSize.width - 32, 300) }
-    private let bracketLen: CGFloat = 24
-    private let bracketThick: CGFloat = 3
+    private var cardWidth: CGFloat { isLandscape ? 280 : min(screenSize.width - 32, 280) }
+    private let bracketLen: CGFloat = 20
+    private let bracketThick: CGFloat = 2
 
     private var isLandscape: Bool { screenSize.width > screenSize.height }
 
-    /// The rect we draw brackets around — falls back to a default box at the fingertip.
     private var targetBox: CGRect {
         if let box = boundingBox { return box }
         let center = fallbackPosition ?? CGPoint(x: screenSize.width / 2, y: screenSize.height / 2)
-        return CGRect(x: center.x - 60, y: center.y - 60, width: 120, height: 120)
+        return CGRect(x: center.x - 50, y: center.y - 50, width: 100, height: 100)
     }
 
-    /// Card position depends on orientation.
-    /// Landscape: beside the bounding box (right preferred, left fallback).
-    /// Portrait: below the bounding box (above fallback if no room below).
     private var cardX: CGFloat {
         let raw: CGFloat
         if isLandscape {
@@ -216,7 +195,6 @@ struct ObjectHighlightOverlay: View {
         } else {
             raw = screenSize.width / 2
         }
-        // Clamp to screen edges with 16pt minimum padding
         let halfW = cardWidth / 2
         return min(max(raw, halfW + 16), screenSize.width - halfW - 16)
     }
@@ -227,26 +205,21 @@ struct ObjectHighlightOverlay: View {
         if isLandscape {
             raw = targetBox.midY
         } else {
-            // Portrait: prefer below the box
             let belowY = targetBox.maxY + 12 + half
             if belowY + half < screenSize.height - 16 {
                 raw = belowY
             } else {
-                // Fallback: above the box
                 let aboveY = targetBox.minY - 12 - half
                 if aboveY - half > 16 {
                     raw = aboveY
                 } else {
-                    // Last resort: screen center
                     raw = screenSize.height / 2
                 }
             }
         }
-        // Clamp to screen edges with 16pt minimum padding
         return min(max(raw, half + 16), screenSize.height - half - 16)
     }
 
-    /// Connector line start point on the bounding box edge.
     private var connectorFrom: CGPoint {
         if isLandscape {
             return CGPoint(
@@ -261,7 +234,6 @@ struct ObjectHighlightOverlay: View {
         }
     }
 
-    /// Connector line end point on the card edge.
     private var connectorTo: CGPoint {
         if isLandscape {
             return CGPoint(
@@ -279,33 +251,22 @@ struct ObjectHighlightOverlay: View {
 
     var body: some View {
         ZStack {
-            // Bounding box glow fill
-            RoundedRectangle(cornerRadius: 8)
-                .fill(Color.green.opacity(0.08))
-                .frame(width: targetBox.width, height: targetBox.height)
-                .position(x: targetBox.midX, y: targetBox.midY)
-                .opacity(glowOpacity)
-
             // Bounding box stroke
-            RoundedRectangle(cornerRadius: 8)
-                .stroke(Color.green.opacity(0.5), lineWidth: 1.5)
+            RoundedRectangle(cornerRadius: 6)
+                .stroke(.white.opacity(0.45), lineWidth: 1)
                 .frame(width: targetBox.width, height: targetBox.height)
                 .position(x: targetBox.midX, y: targetBox.midY)
-                .opacity(bracketOpacity)
+                .opacity(appear ? 1 : 0)
 
             // Corner brackets
             CornerBrackets(rect: targetBox, len: bracketLen, thick: bracketThick)
-                .scaleEffect(bracketScale)
-                .opacity(bracketOpacity)
+                .opacity(appear ? 1 : 0)
 
-            // Connector line from box edge to card
-            ConnectorLine(
-                from: connectorFrom,
-                to: connectorTo
-            )
-            .opacity(bracketOpacity * 0.6)
+            // Connector line
+            ConnectorLine(from: connectorFrom, to: connectorTo)
+                .opacity(appear ? 0.5 : 0)
 
-            // Floating product info card
+            // Floating product card
             FloatingProductCard(
                 product: product,
                 onAddToCart: onAddToCart,
@@ -324,11 +285,7 @@ struct ObjectHighlightOverlay: View {
             .position(x: cardX, y: cardY)
         }
         .onAppear {
-            withAnimation(.spring(duration: 0.4)) {
-                bracketOpacity = 1
-                bracketScale = 1
-                glowOpacity = 1
-            }
+            withAnimation(.spring(duration: 0.35)) { appear = true }
         }
     }
 }
@@ -342,7 +299,7 @@ struct CornerBrackets: View {
 
     var body: some View {
         Canvas { ctx, _ in
-            let color = GraphicsContext.Shading.color(.green)
+            let color = GraphicsContext.Shading.color(.white)
             let corners: [(CGPoint, Bool, Bool)] = [
                 (CGPoint(x: rect.minX, y: rect.minY), false, false),
                 (CGPoint(x: rect.maxX, y: rect.minY), true,  false),
@@ -368,8 +325,6 @@ struct CornerBrackets: View {
 }
 
 // MARK: - Connector Line
-// `from` and `to` are in the coordinate space of ObjectHighlightOverlay's ZStack
-// (which is sized to fill the screen via .frame(width:height:) in ContentView).
 
 struct ConnectorLine: View {
     let from: CGPoint
@@ -380,8 +335,8 @@ struct ConnectorLine: View {
             var p = Path()
             p.move(to: from)
             p.addLine(to: to)
-            ctx.stroke(p, with: .color(.green.opacity(0.7)),
-                       style: StrokeStyle(lineWidth: 1, dash: [4, 4]))
+            ctx.stroke(p, with: .color(.white.opacity(0.4)),
+                       style: StrokeStyle(lineWidth: 0.5, dash: [4, 4]))
         }
         .allowsHitTesting(false)
     }
@@ -395,78 +350,96 @@ struct FloatingProductCard: View {
     let onBuyNow: () -> Void
     let onDismiss: () -> Void
 
-    @State private var shimmerOffset: CGFloat = -1
-    @State private var pulseScale: CGFloat = 1.0
-
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            // Header: title + dismiss
+        VStack(alignment: .leading, spacing: 14) {
+            // Header
             HStack(alignment: .top) {
-                Text(product.name)
-                    .font(.custom("DMSans-Bold", size: 28))
-                    .foregroundStyle(.primary)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.75)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(product.name)
+                        .font(.title3.weight(.semibold))
+                        .foregroundStyle(.white)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.8)
+
+                    Text(product.formattedPrice)
+                        .font(.headline)
+                        .foregroundStyle(.white.opacity(0.8))
+                }
                 Spacer()
                 Button(action: onDismiss) {
-                    Image(systemName: "xmark.circle.fill")
-                        .foregroundStyle(.red)
-                        .font(.title2)
+                    Image(systemName: "xmark")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.white.opacity(0.5))
+                        .frame(width: 28, height: 28)
+                        .background(.white.opacity(0.1), in: Circle())
                 }
             }
 
-            Text(product.formattedPrice)
-                .font(.custom("DMSans-Bold", size: 24))
-                .foregroundStyle(.primary)
-
-            // Action buttons
-            VStack(spacing: 10) {
+            // Actions — side by side for fewer taps
+            HStack(spacing: 10) {
                 Button(action: onAddToCart) {
                     Text("Add to Cart")
-                        .font(.custom("DMSans-Bold", size: 18))
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.white)
                         .frame(maxWidth: .infinity)
-                        .padding(.vertical, 16)
+                        .padding(.vertical, 12)
+                        .background(.white.opacity(0.15), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                                .stroke(.white.opacity(0.2), lineWidth: 0.5)
+                        )
                 }
-                .buttonStyle(.borderedProminent)
-                .tint(.blue)
 
                 Button(action: onBuyNow) {
                     Text("Buy Now")
-                        .font(.custom("DMSans-Bold", size: 18))
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.white)
                         .frame(maxWidth: .infinity)
-                        .padding(.vertical, 16)
+                        .padding(.vertical, 12)
+                        .background(.white.opacity(0.25), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                                .stroke(.white.opacity(0.3), lineWidth: 0.5)
+                        )
                 }
-                .buttonStyle(.borderedProminent)
-                .tint(.green)
-                .scaleEffect(pulseScale)
             }
         }
-        .padding(24)
+        .padding(20)
         .background {
-            RoundedRectangle(cornerRadius: 20)
+            GlassBackground(cornerRadius: 24)
+        }
+        .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
+        .shadow(color: .black.opacity(0.25), radius: 20, y: 8)
+    }
+}
+
+// MARK: - Glass Background (Reusable)
+
+struct GlassBackground: View {
+    var cornerRadius: CGFloat = 24
+
+    var body: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
                 .fill(.ultraThinMaterial)
-                .opacity(0.7)
+            RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                .fill(
+                    LinearGradient(
+                        colors: [.white.opacity(0.12), .white.opacity(0.03)],
+                        startPoint: .topLeading, endPoint: .bottomTrailing
+                    )
+                )
         }
         .overlay(
-            RoundedRectangle(cornerRadius: 20)
+            RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
                 .stroke(
                     LinearGradient(
-                        colors: [.green.opacity(0.6), .green.opacity(0.2), .green.opacity(0.6)],
-                        startPoint: UnitPoint(x: shimmerOffset, y: 0),
-                        endPoint: UnitPoint(x: shimmerOffset + 0.5, y: 1)
+                        colors: [.white.opacity(0.5), .white.opacity(0.08)],
+                        startPoint: .top, endPoint: .bottom
                     ),
-                    lineWidth: 1.5
+                    lineWidth: 0.5
                 )
         )
-        .shadow(color: .green.opacity(0.25), radius: 16, y: 6)
-        .onAppear {
-            withAnimation(.linear(duration: 2).repeatForever(autoreverses: false)) {
-                shimmerOffset = 1.5
-            }
-            withAnimation(.easeInOut(duration: 1.2).repeatForever(autoreverses: true)) {
-                pulseScale = 1.03
-            }
-        }
     }
 }
 
@@ -478,29 +451,35 @@ struct StoreLoadingPrompt: View {
     var body: some View {
         VStack(spacing: 16) {
             Spacer()
-            VStack(spacing: 12) {
+            VStack(spacing: 14) {
                 Image(systemName: "wave.3.right")
-                    .font(.system(size: 36))
-                    .foregroundStyle(.blue)
+                    .font(.system(size: 32, weight: .light))
+                    .foregroundStyle(.white.opacity(0.8))
 
-                Text("Scan NFC Tag to Start")
+                Text("Scan NFC to Start")
                     .font(.headline)
-                    .foregroundStyle(.primary)
+                    .foregroundStyle(.white)
 
-                Text("Tap an NFC tag or enter a store URL")
+                Text("Tap a tag or enter a store URL")
                     .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(.white.opacity(0.5))
 
-                // Demo button for hackathon
-                Button("Load Demo Store (ID: 42)") {
-                    appState.storeService.load(id: 42)
+                Button {
+                    appState.loadStore(id: 42, demographic: .adult)
+                } label: {
+                    Text("Load Demo Store")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 24)
+                        .padding(.vertical, 11)
+                        .background(.white.opacity(0.18), in: Capsule())
+                        .overlay(Capsule().stroke(.white.opacity(0.25), lineWidth: 0.5))
                 }
-                .buttonStyle(.borderedProminent)
-                .tint(.blue)
             }
-            .padding(24)
-            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 20))
-            .shadow(radius: 20)
+            .padding(28)
+            .background { GlassBackground(cornerRadius: 24) }
+            .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
+            .shadow(color: .black.opacity(0.25), radius: 20, y: 8)
             .padding(.horizontal, 40)
             Spacer().frame(height: 100)
         }

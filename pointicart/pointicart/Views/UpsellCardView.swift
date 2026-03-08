@@ -3,50 +3,42 @@ import SwiftUI
 struct UpsellCardView: View {
     let product: Product
     let onAddToCart: () -> Void
-    @State private var isGlowing = false
 
     var body: some View {
         VStack(spacing: 8) {
             Text("Frequently Bought Together")
-                .font(.caption2)
-                .foregroundStyle(.secondary)
+                .font(.caption2.weight(.medium))
+                .foregroundStyle(.white.opacity(0.5))
                 .textCase(.uppercase)
 
             HStack(spacing: 10) {
                 Image(systemName: product.imageSystemName)
-                    .font(.system(size: 22))
-                    .foregroundStyle(.orange)
+                    .font(.system(size: 20))
+                    .foregroundStyle(.white.opacity(0.7))
 
                 VStack(alignment: .leading, spacing: 2) {
                     Text(product.name)
-                        .font(.subheadline.bold())
-                        .foregroundStyle(.primary)
+                        .font(.subheadline.weight(.medium))
+                        .foregroundStyle(.white)
                     Text(product.formattedPrice)
                         .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(.white.opacity(0.5))
                 }
 
                 Spacer()
 
                 Button(action: onAddToCart) {
                     Image(systemName: "plus.circle.fill")
-                        .font(.title2)
-                        .foregroundStyle(.orange)
+                        .font(.title3)
+                        .symbolRenderingMode(.hierarchical)
+                        .foregroundStyle(.white.opacity(0.7))
                 }
             }
         }
         .padding(14)
         .frame(width: 220)
-        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 14))
-        .overlay(
-            RoundedRectangle(cornerRadius: 14)
-                .stroke(isGlowing ? Color.orange.opacity(0.8) : Color.clear, lineWidth: 2)
-        )
-        .shadow(color: isGlowing ? .orange.opacity(0.4) : .black.opacity(0.2), radius: isGlowing ? 12 : 8, y: 5)
-        .onAppear {
-            withAnimation(.easeInOut(duration: 1.2).repeatForever(autoreverses: true)) {
-                isGlowing = true
-            }
-        }
+        .background { GlassBackground(cornerRadius: 20) }
+        .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
+        .shadow(color: .black.opacity(0.2), radius: 12, y: 5)
     }
 }
