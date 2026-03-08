@@ -15,7 +15,8 @@ struct ContentView: View {
                     ScanningIndicator(
                         isDwelling: appState.isDwelling,
                         isIdentifying: appState.isIdentifying,
-                        isProductRecognized: appState.isProductRecognized
+                        isProductRecognized: appState.isProductRecognized,
+                        showCartFlash: appState.showCartConfirmFlash
                     )
                     .position(position)
                 }
@@ -41,15 +42,30 @@ struct ContentView: View {
                         boundingBox: appState.identifiedBoundingBox,
                         fallbackPosition: appState.identifiedPosition,
                         screenSize: geo.size,
+                        cartQuantity: appState.cartManager.quantity(of: product.id),
                         onAddToCart: {
+                            appState.cancelAutoDismissTimer()
                             appState.addToCart(product)
+                            appState.triggerCartConfirmFlash()
                             withAnimation(.spring(duration: 0.3)) { appState.dismissProductCard() }
                         },
                         onBuyNow: {
+                            appState.cancelAutoDismissTimer()
                             appState.addToCart(product)
                             appState.showDirectCheckout = true
                         },
+                        onIncrement: {
+                            appState.cancelAutoDismissTimer()
+                            appState.addToCart(product)
+                            appState.startAutoDismissTimer()
+                        },
+                        onDecrement: {
+                            appState.cancelAutoDismissTimer()
+                            appState.cartManager.decrementOrRemove(product.id)
+                            appState.startAutoDismissTimer()
+                        },
                         onDismiss: {
+                            appState.cancelAutoDismissTimer()
                             withAnimation(.spring(duration: 0.3)) { appState.dismissProductCard() }
                         }
                     )

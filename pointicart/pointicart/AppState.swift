@@ -28,8 +28,27 @@ final class AppState {
     var showProductCard: Bool = false
     var showDirectCheckout: Bool = false
 
+    // UX: Cart confirm flash (feature 7)
+    var showCartConfirmFlash: Bool = false
+
+    // UX: Position cache for instant re-identification (feature 1)
+    private var positionCache: [String: PositionCacheEntry] = [:]
+    private let positionCacheTTL: TimeInterval = 30.0
+
+    // UX: Auto-dismiss timer (feature 5)
+    private var autoDismissTask: Task<Void, Never>?
+    private let autoDismissDelay: TimeInterval = 4.0
+
     // Abandoned cart timer
     private var abandonedCartTask: Task<Void, Never>?
+
+    // MARK: - Position Cache Entry
+
+    struct PositionCacheEntry {
+        let productKey: String
+        let boundingBox: CGRect?
+        let timestamp: Date
+    }
 
     var identifiedProduct: Product? {
         guard let key = identifiedProductKey else { return nil }
@@ -141,22 +160,62 @@ final class AppState {
             NSLog("[PTIC] onDwellDetected SKIP — already identifying")
             return
         }
-        isIdentifying = true
-        defer {
-            isIdentifying = false
-            NSLog("[PTIC] onDwellDetected EXIT — isIdentifying reset to false")
-        }
 
-        let candidates = storeService.recognizableProductKeys
-        NSLog("[PTIC] Store loaded=%d, candidates=%@",
-              storeService.isLoaded ? 1 : 0,
-              candidates.joined(separator: ", "))
+        let candidates = storeService.productKeys
         guard !candidates.isEmpty else {
             NSLog("[PTIC] onDwellDetected SKIP — no candidates (store not loaded)")
             return
         }
 
         let capturedPosition = fingertipPosition
+
+        // Feature 1: Check position cache first — skip Gemini if we recently identified here
+        if let cached = cachedProduct(near: capturedPosition) {
+            NSLog("[PTIC] Cache HIT for %@", cached.productKey)
+
+            // Feature 2: Second-dwell = auto add to cart (no card)
+            if showProductCard, identifiedProductKey == cached.productKey {
+                if let product = storeService.product(forKey: cached.productKey) {
+                    addToCart(product)
+                    triggerCartConfirmFlash()
+                    dismissProductCard()
+                    NSLog("[PTIC] Second-dwell auto-add: %@", cached.productKey)
+                }
+                return
+            }
+
+            // Feature 8: Intensity-gated auto-add — high engagement skips card
+            let intensity = RecommendationEngine.computeIntensity(
+                timeInStore: vectorStore.timeInStoreSeconds,
+                cartItemCount: cartManager.itemCount,
+                addFrequency: vectorStore.addFrequency,
+                dwellCount: vectorStore.dwellCount
+            )
+            if intensity > 0.8, let product = storeService.product(forKey: cached.productKey),
+               !cartManager.contains(product.id) {
+                addToCart(product)
+                triggerCartConfirmFlash()
+                NSLog("[PTIC] Intensity-gated auto-add (%.2f): %@", intensity, cached.productKey)
+                return
+            }
+
+            // Show card instantly from cache
+            identifiedProductKey = cached.productKey
+            identifiedPosition = capturedPosition
+            identifiedBoundingBox = cached.boundingBox
+            isProductRecognized = true
+            showProductCard = true
+            startAutoDismissTimer()
+            vectorStore.recordDwell()
+            return
+        }
+
+        // No cache hit — call Gemini
+        isIdentifying = true
+        defer {
+            isIdentifying = false
+            NSLog("[PTIC] onDwellDetected EXIT — isIdentifying reset to false")
+        }
 
         NSLog("[PTIC] Sending image %.0fx%.0f to Gemini with %d candidates",
               image.size.width, image.size.height, candidates.count)
@@ -165,14 +224,26 @@ final class AppState {
             let result = try await inferenceService.identify(image: image, candidates: candidates)
             NSLog("[PTIC] Inference result: %@", String(describing: result?.productKey))
             if let result, storeService.product(forKey: result.productKey) != nil {
-                identifiedProductKey = result.productKey
-                identifiedPosition = capturedPosition
-                identifiedBoundingBox = result.normalizedBox.map {
+                let screenBox = result.normalizedBox.map {
                     Self.screenRect(fromNormalized: $0, imageSize: image.size)
                 }
+
+                identifiedProductKey = result.productKey
+                identifiedPosition = capturedPosition
+                identifiedBoundingBox = screenBox
                 isProductRecognized = true
                 showProductCard = true
                 NSLog("[PTIC] Product recognized: %@ — showProductCard=true", result.productKey)
+
+                // Cache this identification (feature 1)
+                cacheIdentification(
+                    productKey: result.productKey,
+                    position: capturedPosition,
+                    boundingBox: screenBox
+                )
+
+                // Feature 5: Start auto-dismiss timer
+                startAutoDismissTimer()
 
                 // Record browsing behavior for recommendation engine
                 vectorStore.recordDwell()
@@ -183,6 +254,60 @@ final class AppState {
         } catch {
             NSLog("[PTIC] Inference ERROR: %@", String(describing: error))
             isDwelling = false
+        }
+    }
+
+    // MARK: - Position Cache (Feature 1)
+
+    private func cacheIdentification(productKey: String, position: CGPoint?, boundingBox: CGRect?) {
+        let entry = PositionCacheEntry(
+            productKey: productKey,
+            boundingBox: boundingBox,
+            timestamp: Date()
+        )
+        positionCache[productKey] = entry
+    }
+
+    private func cachedProduct(near position: CGPoint?) -> PositionCacheEntry? {
+        let now = Date()
+        // Evict expired entries
+        positionCache = positionCache.filter { now.timeIntervalSince($0.value.timestamp) < positionCacheTTL }
+
+        guard let pos = position else { return nil }
+
+        // Check if fingertip is inside any cached bounding box
+        for entry in positionCache.values {
+            if let box = entry.boundingBox, box.insetBy(dx: -20, dy: -20).contains(pos) {
+                return entry
+            }
+        }
+        return nil
+    }
+
+    // MARK: - Auto-Dismiss Timer (Feature 5)
+
+    func startAutoDismissTimer() {
+        autoDismissTask?.cancel()
+        autoDismissTask = Task { @MainActor in
+            try? await Task.sleep(for: .seconds(autoDismissDelay))
+            guard !Task.isCancelled, showProductCard else { return }
+            dismissProductCard()
+            NSLog("[PTIC] Auto-dismissed product card after %.0fs", autoDismissDelay)
+        }
+    }
+
+    func cancelAutoDismissTimer() {
+        autoDismissTask?.cancel()
+    }
+
+    // MARK: - Cart Confirm Flash (Feature 7)
+
+    func triggerCartConfirmFlash() {
+        UIImpactFeedbackGenerator(style: .heavy).impactOccurred()
+        showCartConfirmFlash = true
+        Task { @MainActor in
+            try? await Task.sleep(for: .seconds(0.6))
+            showCartConfirmFlash = false
         }
     }
 
