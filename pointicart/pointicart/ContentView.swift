@@ -36,7 +36,7 @@ struct ContentView: View {
                 }
 
                 // Layer 3: Object highlight + floating info card
-                if appState.showProductCard, let product = appState.identifiedProduct {
+                if appState.showProductCard, let product = appState.identifiedProduct, !appState.isTryOnMode {
                     ObjectHighlightOverlay(
                         product: product,
                         upsell: appState.upsellProduct,
@@ -75,20 +75,22 @@ struct ContentView: View {
                     TryOnOverlay(appState: appState)
                 }
 
-                // Layer 4: Cart overlay (bottom bar)
-                CartOverlayView(
-                    cartManager: appState.cartManager,
-                    storeName: appState.storeService.storeName,
-                    suggestedProduct: appState.upsellProduct,
-                    onAddSuggested: { product in
-                        appState.cartManager.add(product)
-                    },
-                    onPaymentComplete: { appState.cancelAbandonedCartTimer() }
-                )
+                // Layer 4: Cart overlay (bottom bar) — hidden while in try-on mode
+                if !appState.isTryOnMode {
+                    CartOverlayView(
+                        cartManager: appState.cartManager,
+                        storeName: appState.storeService.storeName,
+                        suggestedProduct: appState.upsellProduct,
+                        onAddSuggested: { product in
+                            appState.cartManager.add(product)
+                        },
+                        onPaymentComplete: { appState.cancelAbandonedCartTimer() }
+                    )
 
-                // Layer 5: Store loading prompt (if no store loaded)
-                if !appState.storeService.isLoaded {
-                    StoreLoadingPrompt(appState: appState)
+                    // Layer 5: Store loading prompt (if no store loaded)
+                    if !appState.storeService.isLoaded {
+                        StoreLoadingPrompt(appState: appState)
+                    }
                 }
             }
         }
@@ -236,6 +238,9 @@ struct ObjectHighlightOverlay: View {
         return min(max(raw, halfW + 16), screenSize.width - halfW - 16)
     }
 
+    // Extra clearance from the bottom edge to avoid overlapping the cart bar.
+    private let bottomClearance: CGFloat = 110
+
     private var cardY: CGFloat {
         let half = measuredCardHeight / 2
         let raw: CGFloat
@@ -244,7 +249,7 @@ struct ObjectHighlightOverlay: View {
         } else {
             // Portrait: prefer below the box
             let belowY = targetBox.maxY + 12 + half
-            if belowY + half < screenSize.height - 16 {
+            if belowY + half < screenSize.height - bottomClearance {
                 raw = belowY
             } else {
                 // Fallback: above the box
@@ -252,13 +257,13 @@ struct ObjectHighlightOverlay: View {
                 if aboveY - half > 16 {
                     raw = aboveY
                 } else {
-                    // Last resort: screen center
-                    raw = screenSize.height / 2
+                    // Last resort: upper-center so cart bar doesn't overlap
+                    raw = screenSize.height * 0.38
                 }
             }
         }
-        // Clamp to screen edges with 16pt minimum padding
-        return min(max(raw, half + 16), screenSize.height - half - 16)
+        // Clamp: 16pt from top, bottomClearance from bottom
+        return min(max(raw, half + 16), screenSize.height - half - bottomClearance)
     }
 
     /// Connector line start point on the bounding box edge.
@@ -506,6 +511,7 @@ struct TryOnOverlay: View {
     @State private var zoomScale: CGFloat = 1.0
     @State private var baseZoom: CGFloat = 1.0
     @State private var showZoomLabel: Bool = false
+    @State private var showAddedToast: Bool = false
 
     private var safeTop: CGFloat {
         UIApplication.shared.connectedScenes
@@ -583,7 +589,7 @@ struct TryOnOverlay: View {
                     ProgressView()
                         .scaleEffect(1.5)
                         .tint(.white)
-                    Text("Generating try-on...")
+                    Text("Resizing to fit you...")
                         .font(.custom("DMSans-Bold", size: 16))
                         .foregroundStyle(.white)
                 }
@@ -623,6 +629,39 @@ struct TryOnOverlay: View {
                         .padding(.bottom, 12)
                 }
                 VStack(spacing: 12) {
+                    // Add to Cart + Buy Now — only on result screen
+                    if appState.tryOnResultImage != nil, let product = appState.tryOnProduct {
+                        HStack(spacing: 12) {
+                            Button {
+                                appState.cartManager.add(product)
+                                appState.startAbandonedCartTimer()
+                                withAnimation(.easeInOut(duration: 0.3)) { showAddedToast = true }
+                                DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+                                    withAnimation(.easeInOut(duration: 0.3)) { showAddedToast = false }
+                                }
+                            } label: {
+                                Text("Add to Cart")
+                                    .font(.custom("DMSans-Bold", size: 16))
+                                    .frame(maxWidth: .infinity)
+                                    .padding(.vertical, 14)
+                            }
+                            .buttonStyle(.borderedProminent)
+                            .tint(.blue)
+
+                            Button {
+                                appState.cartManager.add(product)
+                                appState.showDirectCheckout = true
+                            } label: {
+                                Text("Buy Now")
+                                    .font(.custom("DMSans-Bold", size: 16))
+                                    .frame(maxWidth: .infinity)
+                                    .padding(.vertical, 14)
+                            }
+                            .buttonStyle(.borderedProminent)
+                            .tint(.green)
+                        }
+                    }
+
                     if appState.capturedPersonImage == nil && !appState.isGeneratingTryOn {
                         Button { appState.captureAndGenerateTryOn() } label: {
                             Label("Take Photo", systemImage: "camera.fill")
@@ -665,6 +704,27 @@ struct TryOnOverlay: View {
                 .padding(.bottom, safeBottom + 20)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+            // 8. "Added to cart" toast — rendered last so it appears above all buttons
+            if showAddedToast {
+                VStack {
+                    Spacer()
+                    HStack(spacing: 10) {
+                        Image(systemName: "checkmark.circle.fill")
+                            .foregroundStyle(.green)
+                        Text("Added to cart")
+                            .font(.custom("DMSans-Bold", size: 15))
+                            .foregroundStyle(.white)
+                    }
+                    .padding(.horizontal, 20)
+                    .padding(.vertical, 12)
+                    .background(.black.opacity(0.8), in: Capsule())
+                    .padding(.bottom, safeBottom + 200)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .transition(.opacity)
+                .allowsHitTesting(false)
+            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .ignoresSafeArea()

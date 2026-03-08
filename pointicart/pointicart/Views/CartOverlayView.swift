@@ -93,6 +93,9 @@ struct CheckoutSheet: View {
                                     .font(.subheadline)
                             }
                         }
+                        .onDelete { indexSet in
+                            indexSet.forEach { cartManager.remove(cartManager.items[$0].product.id) }
+                        }
                     }
 
                     // Recommended product
@@ -176,6 +179,9 @@ struct CheckoutSheet: View {
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Close") { dismiss() }
+                }
+                ToolbarItem(placement: .primaryAction) {
+                    EditButton()
                 }
             }
         }
